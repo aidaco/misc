@@ -43,9 +43,9 @@ def splashscreen(terminal: Terminal, text: str, duration: float):
 def screenfill(
     terminal: Terminal,
     *,
-    char: str = "●",
-    steps: int = 50,
-    duration: float = 0.5,
+    char: str = "*",
+    steps: int = 60,
+    duration: float = 1.0,
     func: Callable[[int, int, float], list[list[bool]]],
 ):
     """Animate filling the screen with the given character."""
@@ -143,13 +143,14 @@ if __name__ == "__main__":
     mod_combos = list(
         chain(*(combinations(modifiers, n) for n in range(1, len(modifiers) + 1)))
     )
-    with t.hidden_cursor():
+    with t.hidden_cursor(), t.fullscreen():
         for base in funcs:
             splashscreen(t, f"{base.__name__}", 1)
             screenfill(t, func=base)
             for mods in mod_combos:
                 splashscreen(
-                    t, f"{base.__name__} {':'.join(f.__name__ for f in mods)}", 1
+                    t, f"{base.__name__} {' -> '.join(f.__name__ for f in mods)}",
+                    1
                 )
                 func = base
                 for mod in mods:
