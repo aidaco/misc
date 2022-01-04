@@ -149,8 +149,7 @@ if __name__ == "__main__":
             screenfill(t, func=base)
             for mods in mod_combos:
                 splashscreen(
-                    t, f"{base.__name__} {' -> '.join(f.__name__ for f in mods)}",
-                    1
+                    t, f"{base.__name__} {' -> '.join(f.__name__ for f in mods)}", 1
                 )
                 func = base
                 for mod in mods:
