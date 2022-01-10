@@ -13,10 +13,11 @@ api = fastapi.FastAPI()
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import Column, String
 from sqlmodel import create_engine, Session, SQLModel, Field, select
 
 SQL_URL = "sqlite+pysqlite:///:memory:"
-EMAIL_REGEX = """(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])"""
+EMAIL_REGEX = """^(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9]))\.){3}(?:(2(5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])$"""
 
 
 engine = create_engine(SQL_URL, echo=True, future=True)
@@ -28,9 +29,9 @@ def init_db():
 
 
 class Account(SQLModel, table=True):
-    uid: str = Field(default_factory=lambda: uuid.uuid4().hex, primary_key=True)
-    email: str = Field(default=None, regex=EMAIL_REGEX, nullable=False, index=True)
-    password_hash: str = Field(default=None, nullable=False)
+    email: str = Field(regex=EMAIL_REGEX, nullable=False, index=True, sa_column=Column(String, unique=True, nullable=False))
+    uid: str = Field(default_factory=lambda: uuid.uuid4().hex, nullable=False, primary_key=True)
+    password_hash: str
     created_at: datetime = Field(default_factory=datetime.now)
 
     def verify(self, password: str) -> bool:
@@ -63,6 +64,9 @@ class Authentication(SQLModel, table=True):
     def __repr__(self) -> str:
         return f"Authentication({self.token}, created_at={self.created_at}, ttl={self.ttl})"
 
+@api.on_event('startup')
+async def startup():
+    init_db()
 
 @api.post("/create", status_code=201)
 async def handle_create_request(
