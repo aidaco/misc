@@ -1,104 +1,93 @@
-from queue import Queue
+from asyncio.events import get_running_loop
+from pathlib import Path
+from collections import deque
+import tempfile
 import asyncio
-import threading
-import multiprocessing
 
-from inotify import INotify
+from inotify import INotify, INEvent
 
 
-class EventQueue:
-    def __init__(self, queue=None):
-        self.queue = queue or Queue
+class watch(INotify):
+    def __init__(
+        self,
+        *paths: Path,
+        chunked: bool = False,
+        chunk_size: int = 4096,
+        mask: int = INEvent.all(),
+    ):
+        self.paths = paths
+        self.mask = mask
+        self.chunked = chunked
+        self.chunk_size = chunk_size
+        if chunked:
+            self.msgs: deque = deque()
 
-    def get(self):
-        return self.queue.get()
+    def __enter__(self):
+        super().__init__(*self.paths, mask=self.mask)
+        return self
 
-    def put(self):
-        return self.queue.put()
+    async def __aenter__(self):
+        super().__init__(*self.paths, mask=self.mask)
+        return self
 
-    async def aget(self):
-        return self.queue.get()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
-    async def aput(self):
-        return self.queue.put()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
-    def producer(self, fn, cancel):
-        while not cancel.is_set():
-            try:
-                self.queue.put(fn())
-            except BlockingIOError:
-                continue
+    def __iter__(self):
+        return self
 
-    async def asyncproducer(self, fn, cancel):
-        while not cancel.is_set():
-            try:
-                self.queue.put(await fn())
-            except BlockingIOError:
-                await asyncio.sleep(0)
+    async def __aiter__(self):
+        return self
 
-    def consumer(self, fn, cancel):
-        while not cancel.is_set():
-            fn(self.queue.get())
+    def __next__(self):
+        if self.chunked:
+            if not self.msgs:
+                self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
+            return self.msgs.pop(0)
+        return self.read()
 
-    async def asyncconsumer(self, fn, cancel):
-        while not cancel.is_set():
-            fn(await self.queue.aget())
+    async def __anext__(self):
+        if self.chunked:
+            if not self.msgs:
+                self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
+            return self.msgs.pop(0)
+        return self.read()
 
 
-def inotify_pipeline(
-    ptransport, ctransport, queuecls, eventcls, ptaskcls, ctaskcls=None
+def watcher(
+    *paths, mask: int = INEvent.all(), chunked: bool = False, chunk_size: int = 4096
 ):
-    ctaskcls = ctaskcls or ptaskcls
-
-    def in_pipe(fn, *paths):
-        inotify = INotify()
-        inotify.add(*paths)
-        queue = EventQueue(queuecls())
-        pcancel, ccancel = eventcls(), eventcls()
-        producer = partial(eq.producer, inotify.read, pcancel)
-        consumer = partial(eq.consumer, fn, ccancel)
-        ptask = ptaskcls(producer)
-        ctask = ctaskcls(consumer)
-        return ptask, ctask, call_sequential(pcancel.set, ccancel.set)
-
-    return in_pipe
+    with watch(*paths, mask=mask, chunked=chunked, chunk_size=chunk_size) as w:
+        for msg in w:
+            yield (msg)
 
 
-as_coroutines = inotify_pipeline(
-    EventQueue.asyncproducer,
-    EventQueue.asyncconsumer,
-    asyncio.Queue,
-    asyncio.Event,
-    lambda job: asyncio.create_task(job()),
-)
-
-as_threads = inotify_pipeline(
-    EventQueue.producer,
-    EventQueue.consumer,
-    Queue,
-    threading.Event,
-    lambda job: threading.Thread(target=job, daemon=True),
-)
-
-as_coro_and_thread = inotify_pipeline(
-    EventQueue.producer,
-    EventQueue.asyncconsumer,
-    multiprocessing.Queue,
-    multiprocessing.Event,
-    lambda producer: threading.Thread(target=producer, daemon=True),
-    lambda consumer: asyncio.create_task(consumer()),
-)
+async def asyncwatcher(
+    *paths, mask: int = INEvent.all(), chunked: bool = False, chunk_size: int = 4096
+):
+    async with watch(*paths, mask=mask, chunked=chunked, chunk_size=chunk_size) as w:
+        async for msg in w:
+            yield msg
 
 
 async def main():
+    loop = asyncio.get_running_loop()
     events = []
     tmp_dir = Path(tempfile.mkdtemp())
-    w = watcher(tmp_dir) >> events.append
+
+    async def wcoro():
+        async for event in asyncwatcher(tmp_dir):
+            events.append(event)
+
+    w = loop.create_task(wcoro())
     print("MAIN :: Created watch")
-    await w.start()
     await file_operations(tmp_dir)
     await asyncio.sleep(1)
-    await w.stop()
+    w.cancel()
+    await w
     print("MAIN :: Stopped watcher")
     print(f"MAIN :: Received Events:")
     print("", *(str(event) for event in events), sep="\n\t")

@@ -1,52 +1,11 @@
-import pytest
 from dataclasses import dataclass
-from queue import Queue
-import asyncio
-import threading
-import multiprocessing
 import os
 import ctypes
 import struct
 from pathlib import Path
-import tempfile
-from functools import reduce, partial
+from functools import reduce
 from enum import IntEnum
-from typing import ClassVar, Callable
 import typing
-from rich import print
-
-
-def call_sequential(*functions):
-    def do():
-        for f in functions:
-            f()
-
-    return do
-
-
-def compose2(f, g):
-    def do(*args, **kwargs):
-        return g(f(*args, **kwargs))
-
-    return do
-
-
-def compose(*functions):
-    return reduce(compose2, functions)
-
-
-def asynccompose2(f, g):
-    async def do(*args, **kwargs):
-        return await g(await f(*args, **kwargs))
-
-    return do
-
-
-def asynccompose(*functions):
-    async def do(*args, **kwargs):
-        return reduce(asynccompose2, functions)(*args, **kwargs)
-
-    return do
 
 
 def load_fns():
@@ -63,10 +22,9 @@ def load_fns():
     )
 
 
-in_init, in_add, in_rm = load_fns()
-
-
 class INEvent(IntEnum):
+    """Holds INotify mask values."""
+
     CREATE = 256
     DELETE = 512
     OPEN = 32
@@ -81,29 +39,36 @@ class INEvent(IntEnum):
     MOVE_SELF = 2048
 
     @classmethod
-    def from_mask(cls, mask):
+    def from_mask(cls, mask) -> list["INEvent"]:
+        """Converts mask to list of INEvent."""
         return [evt for evt in cls if evt.value & mask]
 
     @classmethod
-    def all(cls):
-        return reduce(lambda x, y: x | y, cls)
+    def all(cls) -> int:
+        """Default mask to capture all events."""
+        return reduce(lambda x, y: int(x) | int(y), cls)
 
 
 @dataclass
 class INMessage:
-    size: ClassVar[int] = struct.calcsize("iIII")
+    size: typing.ClassVar[int] = struct.calcsize("iIII")
     wd: int
-    event: INEvent
+    events: list[INEvent]
     cookie: int
     name: str
 
     @classmethod
     def unpack_from(cls, data: bytearray):
         if len(data) < cls.size:
-            return None
+            raise ValueError("Not enough data to unpack.")
         w, m, c, l = struct.unpack_from("iIII", data)
-        n, data = bytes(data[cls.size : cls.size + l]), data[cls.size + l :]
-        return cls(w, INEvent.from_mask(m), c, os.fsdecode(n.rstrip(b"\x00"))), data
+        if l > 0:
+            n = os.fsdecode(bytes(data[cls.size : cls.size + l]).rstrip(b"\x00"))
+            data = data[cls.size + l :]
+        else:
+            n, data = "", data[cls.size :]
+        e = INEvent.from_mask(m)
+        return cls(w, e, c, n), data
 
     @classmethod
     def read_from(cls, fio: typing.BinaryIO):
@@ -115,47 +80,48 @@ class INMessage:
         else:
             n = ""
         e = INEvent.from_mask(m)
-        print(f"INOTIFY :: Parsed: {w=}\t{c=}\t{l=}\n\t{e}\t{n=}")
         return INMessage(w, e, c, n)
 
 
 class INotify:
-    def __init__(self):
+    in_init, in_add, in_rm = load_fns()
+
+    def __init__(self, *paths: Path, mask: int = INEvent.all()):
         self.pathwds: dict[Path, int] = {}
         self.wdpaths: dict[int, Path] = {}
-        fd = in_init(os.O_NONBLOCK)
-        print(f"INOTIFY :: Init with {fd=}")
-        if fd == -1:
+        self.fd = self.in_init(os.O_NONBLOCK)
+        if self.fd == -1:
             raise ValueError("Could not initialize inotify.")
-        self.fio = open(fd, "rb", closefd=False)
+        self.add(*paths, mask=mask)
+        self.fio = open(self.fd, "rb", closefd=False)
 
     def add(self, *paths: Path, mask: int = INEvent.all()):
         for path in paths:
-            if (wd := in_add(self.fio.fileno(), bytes(path.resolve()), mask)) == -1:
+            if (wd := self.in_add(self.fd, bytes(path.resolve()), mask)) == -1:
                 raise ValueError(f"Adding watch on path {path} failed.")
-            print(f"INOTIFY :: Watching {path} for {INEvent.from_mask(mask)}")
             self.pathwds[path] = wd
             self.wdpaths[wd] = path
 
     def rm(self, wd: int):
-        if in_rm(self.fio.fileno(), wd) == -1:
+        if self.in_rm(self.fd, wd) == -1:
             raise ValueError("Nonexistent inotify and/or watch.")
         del self.pathwds[self.wdpaths[wd]]
         del self.wdpaths[wd]
 
-    def read(self):
+    def read(
+        self, chunked: bool = False, chunk_size: int = 4096
+    ) -> INMessage | typing.Sequence[INMessage]:
+        if chunked:
+            data = bytearray(chunk_size)
+            self.fio.readinto(data)
+            msgs = []
+            try:
+                while True:
+                    msg, data = INMessage.unpack_from(data)
+                    msgs.append(msg)
+            finally:
+                return msgs
         return INMessage.read_from(self.fio)
 
     def close(self):
         self.fio.close()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        while True:
-            try:
-                evt = self.read()
-                return evt
-            except BlockingIOError:
-                continue
