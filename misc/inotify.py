@@ -58,44 +58,49 @@ class INMessage:
     name: str
 
     @classmethod
-    def unpack_from(cls, data: bytearray):
-        if len(data) < cls.size:
-            raise ValueError("Not enough data to unpack.")
-        w, m, c, l = struct.unpack_from("iIII", data)
-        if l > 0:
-            n = os.fsdecode(bytes(data[cls.size : cls.size + l]).rstrip(b"\x00"))
-            data = data[cls.size + l :]
-        else:
-            n, data = "", data[cls.size :]
-        e = INEvent.from_mask(m)
-        return cls(w, e, c, n), data
-
-    @classmethod
-    def read_from(cls, fio: typing.BinaryIO):
-        bs = fio.read(cls.size)
+    def read(cls, fd: int) -> 'INMessage':
+        bs = os.read(fd, cls.size)
+        if not bs:
+            raise ValueError("No data read.")
         w, m, c, l = struct.unpack("iIII", bs)
         if l > 0:
-            bs = fio.read(l)
+            bs = os.read(fd, l)
             n = os.fsdecode(bytes(bs).rstrip(b"\x00")) if l > 0 else ""
         else:
             n = ""
         e = INEvent.from_mask(m)
-        return INMessage(w, e, c, n)
+        return cls(w, e, c, n)
+
+    @classmethod
+    def read_chunk(cls, fd: int, chunk_size: int = 4096) -> list['INMessage']:
+        bs = os.read(fd, chunk_size)
+        msgs = []
+        while len(bs) >= cls.size:
+            w, m, c, l, bs = struct.unpack("iIII", bs[:cls.size]), bs[cls.size:]
+            if l > 0:
+                n, bs = os.fsdecode(bytes(bs[:l]).rstrip(b"\x00")), bs[:l]
+            else:
+                n = ""
+            e = INEvent.from_mask(m)
+            msgs.append(cls(w, e, c, n))
+        return msgs
 
 
 class INotify:
     in_init, in_add, in_rm = load_fns()
 
     def __init__(self, *paths: Path, mask: int = INEvent.all()):
+        print('IN :: INIT')
         self.pathwds: dict[Path, int] = {}
         self.wdpaths: dict[int, Path] = {}
         self.fd = self.in_init(os.O_NONBLOCK)
+        self.closed = False
         if self.fd == -1:
             raise ValueError("Could not initialize inotify.")
         self.add(*paths, mask=mask)
-        self.fio = open(self.fd, "rb", closefd=False)
 
     def add(self, *paths: Path, mask: int = INEvent.all()):
+        print('IN :: ADD')
         for path in paths:
             if (wd := self.in_add(self.fd, bytes(path.resolve()), mask)) == -1:
                 raise ValueError(f"Adding watch on path {path} failed.")
@@ -112,16 +117,10 @@ class INotify:
         self, chunked: bool = False, chunk_size: int = 4096
     ) -> INMessage | typing.Sequence[INMessage]:
         if chunked:
-            data = bytearray(chunk_size)
-            self.fio.readinto(data)
-            msgs = []
-            try:
-                while True:
-                    msg, data = INMessage.unpack_from(data)
-                    msgs.append(msg)
-            finally:
-                return msgs
-        return INMessage.read_from(self.fio)
+            return INMessage.read_chunk(self.fd, chunk_size)
+        return INMessage.read(self.fd)
 
     def close(self):
-        self.fio.close()
+        print('IN :: CLOSE ')
+        self.closed = True
+        os.close(self.fd)

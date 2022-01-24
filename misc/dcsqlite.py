@@ -113,9 +113,13 @@ class INSERT:
         self.conflict = conflict
         return self
 
-    def VALUES(insert, **kwargs):
+    def VALUES(insert, dc: typing.Any = None, **kwargs):
         column_map = {c.name: c for c in insert.table.columns}
-        insert.values = {column_map[k]: v for k, v in kwargs.items()}
+        if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
+            insert.values = {column_map[k]: v for k, v in
+                             dataclasses.asdict(dc).items()}
+        else:
+            insert.values = {column_map[k]: v for k, v in kwargs.items()}
         return insert
 
     def to_sql(insert):
@@ -194,15 +198,24 @@ class UPDATE:
         self.conflict = conflict
         return self
 
-    def SET(update, **kwargs):
+    def SET(update, dc: typing.Any = None, **kwargs):
         column_map = {c.name: c for c in update.table.columns}
-        update.set = {column_map[k]: v for k, v in kwargs.items()}
+        if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
+            update.set = {column_map[k]: v for k, v in
+                          dataclasses.asdict(dc).items()}
+        else:
+            update.set = {column_map[k]: v for k, v in kwargs.items()}
         return update
 
-    def WHERE(update, *args, **kwargs):
-        update.where = [repr(expr) for expr in args] + [
-            f"{k}={repr(v)}" for k, v in kwargs.items()
-        ]
+    def WHERE(update, dc: typing.Any = None, *args, **kwargs):
+        column_map = {c.name: c for c in update.table.columns}
+        if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
+            update.where = {column_map[k]: v for k, v in
+                            dataclasses.asdict(dc).items()}
+        else:
+            kwargs_cols = {column_map[k]: v for k,v in kwargs.items()}
+            args_cols = {column_map[k]: v for k,v in column_map.items() if column_map[k] not in kwargs_cols}
+            update.where = args_cols | kwargs_cols
         return update
 
     def to_sql(update):
@@ -215,8 +228,8 @@ class UPDATE:
                     f"OR {update.conflict}"
                     if update.conflict in CONFLICT_MODES
                     else None,
-                    f"SET {', '.join(f'{col.name}={col.tm.ser(val)!r}' for col, val in update.set.items())}",
-                    f"WHERE {' AND '.join(update.where)}" if update.where else None,
+                    f"SET {', '.join(f'{c.name}={c.tm.ser(v)!r}' for c,v in update.set.items())}",
+                    f"WHERE {' AND '.join(f'{col.name}={col.tm.ser(val)!r}' for col, val in update.where.items())}" if update.where else None,
                 ]
                 if s is not None
             )
@@ -254,15 +267,15 @@ def main():
             default_factory=datetime.datetime.now
         )
 
-    ut = as_table(User)
+    users = as_table(User)
     u1 = User(email="test1@web.com")
     u2 = User(email="test2@web.com", id=12)
-    execute(CREATE(ut))
-    execute(INSERT(ut).VALUES(**dataclasses.asdict(u1)))
-    execute(INSERT(ut).VALUES(**dataclasses.asdict(u2)))
-    execute(SELECT(ut))
-    execute(UPDATE(ut).SET(email="user@web.com").WHERE(**dataclasses.asdict(u2)))
-    execute(SELECT(ut))
+    execute(CREATE(users))
+    execute(INSERT(users).VALUES(u1))
+    execute(INSERT(users).VALUES(u2))
+    execute(SELECT(users))
+    execute(UPDATE(users).SET(email="user@web.com").WHERE(u2))
+    execute(SELECT(users))
 
 
 if __name__ == "__main__":

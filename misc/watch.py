@@ -23,7 +23,7 @@ class watch(INotify):
             self.msgs: deque = deque()
 
     def __enter__(self):
-        super().__init__(*self.paths, mask=self.mask)
+        super().__init__(self, *self.paths, mask=self.mask)
         return self
 
     async def __aenter__(self):
@@ -39,22 +39,32 @@ class watch(INotify):
     def __iter__(self):
         return self
 
-    async def __aiter__(self):
+    def __aiter__(self):
         return self
 
     def __next__(self):
-        if self.chunked:
-            if not self.msgs:
-                self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
-            return self.msgs.pop(0)
-        return self.read()
+        while not self.closed:
+            try:
+                if self.chunked:
+                    if not self.msgs:
+                        self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
+                    return self.msgs.pop(0)
+                return self.read()
+            except BlockingIOError:
+                continue
+        raise StopIteration
 
     async def __anext__(self):
-        if self.chunked:
-            if not self.msgs:
-                self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
-            return self.msgs.pop(0)
-        return self.read()
+        while not self.closed:
+            try:
+                if self.chunked:
+                    if not self.msgs:
+                        self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
+                    return self.msgs.pop(0)
+                return self.read()
+            except BlockingIOError:
+                await asyncio.sleep(0)
+        raise StopAsyncIteration
 
 
 def watcher(
@@ -68,9 +78,15 @@ def watcher(
 async def asyncwatcher(
     *paths, mask: int = INEvent.all(), chunked: bool = False, chunk_size: int = 4096
 ):
-    async with watch(*paths, mask=mask, chunked=chunked, chunk_size=chunk_size) as w:
-        async for msg in w:
-            yield msg
+    try:
+        async with watch(*paths, mask=mask, chunked=chunked, chunk_size=chunk_size) as w:
+            print('ASYNCWATCHER :: WATCHING')
+            async for msg in w:
+                print('ASYNCWATCHER :: RECVD')
+                yield msg
+            print('ASYNCWATCHER :: EXITING')
+    except asyncio.CancelledError:
+        print('ASNYNCWATCHER :: DONE')
 
 
 async def main():
@@ -79,15 +95,18 @@ async def main():
     tmp_dir = Path(tempfile.mkdtemp())
 
     async def wcoro():
-        async for event in asyncwatcher(tmp_dir):
-            events.append(event)
+        try:
+            print("WCORO :: STARTED")
+            async for event in asyncwatcher(tmp_dir):
+                print("WCORO :: RECVD")
+                events.append(event)
+        except asyncio.CancelledError:
+            print("WCORO :: DONE")
 
-    w = loop.create_task(wcoro())
-    print("MAIN :: Created watch")
-    await file_operations(tmp_dir)
-    await asyncio.sleep(1)
-    w.cancel()
-    await w
+    task = asyncio.gather(wcoro(), file_operations(tmp_dir))
+    await asyncio.sleep(2)
+    task.cancel()
+    await task
     print("MAIN :: Stopped watcher")
     print(f"MAIN :: Received Events:")
     print("", *(str(event) for event in events), sep="\n\t")
