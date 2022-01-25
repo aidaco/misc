@@ -49,6 +49,10 @@ class TABLE:
     name: str
     columns: list[COLUMN]
 
+    @property
+    def column_map(self):
+        return dict((c.name, c) for c in self.columns)
+
 
 def as_column(field: dataclasses.Field) -> COLUMN:
     """Convert a dataclass field to a Column object."""
@@ -79,10 +83,14 @@ def execute(stmt: Statement) -> typing.Any:
     print(sql)
 
 
+@dataclasses.dataclass
 class CREATE:
-    def __init__(self, table: TABLE, overwrite_exists: bool = False):
-        self.table = table
-        self.overwrite_exists = overwrite_exists
+    table: TABLE
+    overwrite: bool = False
+
+    def OVERWRITEOK(create):
+        create.overwrite = True
+        return create
 
     def to_sql(create) -> str:
         return (
@@ -91,10 +99,10 @@ class CREATE:
                 for s in [
                     "CREATE TABLE",
                     create.table.name,
-                    f"({', '.join(c.column_def for c in create.table.columns)})",
-                    "IF NOT EXISTS" if not create.overwrite_exists else "",
+                    f"({', '.join(map(lambda c: c.column_def, create.table.columns))})",
+                    "IF NOT EXISTS" if not create.overwrite else None,
                 ]
-                if s != ""
+                if s != None
             )
             + ";"
         )
@@ -103,23 +111,23 @@ class CREATE:
 CONFLICT_MODES = {"abort", "fail", "ignore", "replace", "rollback"}
 
 
+@dataclasses.dataclass
 class INSERT:
-    def __init__(self, table: TABLE):
-        self.table = table
-        self.conflict: str | None = None
-        self.values: dict[COLUMN, typing.Any] = {}
+    table: TABLE
+    conflict: str = "abort"
+    values: dict[COLUMN, typing.Any] = dataclasses.field(default_factory=dict)
 
-    def OR(self, conflict: str = "abort"):
-        self.conflict = conflict
-        return self
+    def OR(insert, conflict: str = "abort"):
+        insert.conflict = conflict
+        return insert
 
     def VALUES(insert, dc: typing.Any = None, **kwargs):
-        column_map = {c.name: c for c in insert.table.columns}
         if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
-            insert.values = {column_map[k]: v for k, v in
-                             dataclasses.asdict(dc).items()}
+            insert.values = {
+                insert.table.column_map[k]: v for k, v in dataclasses.asdict(dc).items()
+            }
         else:
-            insert.values = {column_map[k]: v for k, v in kwargs.items()}
+            insert.values = {insert.table.column_map[k]: v for k, v in kwargs.items()}
         return insert
 
     def to_sql(insert):
@@ -133,7 +141,7 @@ class INSERT:
                 s
                 for s in [
                     "INSERT",
-                    f"OR {insert.conflict}"
+                    f"OR {insert.conflict.upper()}"
                     if insert.conflict in CONFLICT_MODES
                     else None,
                     "INTO",
@@ -147,25 +155,37 @@ class INSERT:
         )
 
 
+@dataclasses.dataclass(init=False)
 class SELECT:
-    def __init__(
-        self,
-        table: TABLE,
-        all: bool = True,
-        subset: list[str] = [],
-        distinct: bool = False,
-    ) -> None:
-        self.table = table
-        self.all = all
-        self.distinct = distinct
-        self.subset = subset
-        self.where = None
+    table: TABLE
+    all: bool = True
+    distinct: bool = False
+    subset: list[COLUMN] = dataclasses.field(default_factory=list)
+    where: dict[COLUMN, typing.Any] = dataclasses.field(default_factory=dict)
 
-    def WHERE(self, *args, **kwargs):
-        self.where = [repr(expr) for expr in args] + [
-            f"{k}={repr(v)}" for k, v in kwargs.items()
-        ]
-        return self
+    def __init__(select, table: TABLE, *subset: COLUMN):
+        select.table = table
+        select.subset = subset
+        select.where = {}
+
+    def DISTINCT(select, *subset: COLUMN):
+        select.subset = subset
+        select.distinct = True
+        select.all = False
+
+    def WHERE(select, dc: typing.Any = None, *exprs, **colexprs):
+        if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
+            select.where = {
+                select.table.column_map[k]: v for k, v in dataclasses.asdict(dc).items()
+            }
+        else:
+            colvals = {select.table.column_map[k]: v for k, v in colexprs.items()}
+            select.where = colvals | {
+                select.table.column_map[k]: v
+                for k, v in select.table.column_map.items()
+                if select.table.column_map[k] not in colvals
+            }
+        return select
 
     def to_sql(select):
         return (
@@ -188,34 +208,37 @@ class SELECT:
         )
 
 
+@dataclasses.dataclass
 class UPDATE:
-    def __init__(self, table: TABLE):
-        self.table = table
-        self.conflict: str | None = None
-        self.where = None
+    table: TABLE
+    conflict: str = "abort"
+    where: dict[COLUMN, typing.Any] = dataclasses.field(default_factory=dict)
 
-    def OR(self, conflict: str = "abort") -> "UPDATE":
-        self.conflict = conflict
-        return self
-
-    def SET(update, dc: typing.Any = None, **kwargs):
-        column_map = {c.name: c for c in update.table.columns}
-        if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
-            update.set = {column_map[k]: v for k, v in
-                          dataclasses.asdict(dc).items()}
-        else:
-            update.set = {column_map[k]: v for k, v in kwargs.items()}
+    def OR(update, conflict: str) -> "UPDATE":
+        update.conflict = conflict
         return update
 
-    def WHERE(update, dc: typing.Any = None, *args, **kwargs):
-        column_map = {c.name: c for c in update.table.columns}
+    def SET(update, dc: typing.Any = None, **colvals: typing.Any):
         if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
-            update.where = {column_map[k]: v for k, v in
-                            dataclasses.asdict(dc).items()}
+            update.set = {
+                update.table.column_map[k]: v for k, v in dataclasses.asdict(dc).items()
+            }
         else:
-            kwargs_cols = {column_map[k]: v for k,v in kwargs.items()}
-            args_cols = {column_map[k]: v for k,v in column_map.items() if column_map[k] not in kwargs_cols}
-            update.where = args_cols | kwargs_cols
+            update.set = {update.table.column_map[c]: v for c, v in colvals.items()}
+        return update
+
+    def WHERE(update, dc: typing.Any = None, *exprs, **colexprs):
+        if dc and dataclasses.is_dataclass(dc) and type(dc) != type:
+            update.where = {
+                update.table.column_map[k]: v for k, v in dataclasses.asdict(dc).items()
+            }
+        else:
+            colvals = {update.table.column_map[k]: v for k, v in colexprs.items()}
+            update.where = colvals | {
+                update.table.column_map[k]: v
+                for k, v in update.table.column_map.items()
+                if update.table.column_map[k] not in colvals
+            }
         return update
 
     def to_sql(update):
@@ -229,7 +252,9 @@ class UPDATE:
                     if update.conflict in CONFLICT_MODES
                     else None,
                     f"SET {', '.join(f'{c.name}={c.tm.ser(v)!r}' for c,v in update.set.items())}",
-                    f"WHERE {' AND '.join(f'{col.name}={col.tm.ser(val)!r}' for col, val in update.where.items())}" if update.where else None,
+                    f"WHERE {' AND '.join(f'{col.name}={col.tm.ser(val)!r}' for col, val in update.where.items())}"
+                    if update.where
+                    else None,
                 ]
                 if s is not None
             )
@@ -259,7 +284,7 @@ TYPEMAP = TypeMap.complete_mapping(
 def main():
     @dataclasses.dataclass
     class User:
-        email: str
+        email: str = dataclasses.field(metadata=dict(column={"unique": True}))
         id: int = dataclasses.field(
             default=None, metadata=dict(column={"primary": True})
         )
@@ -268,13 +293,16 @@ def main():
         )
 
     users = as_table(User)
-    u1 = User(email="test1@web.com")
-    u2 = User(email="test2@web.com", id=12)
+    u1 = User(email="test@web.com")
+    u2 = User(email="test@web.com", id=12)
     execute(CREATE(users))
     execute(INSERT(users).VALUES(u1))
-    execute(INSERT(users).VALUES(u2))
-    execute(SELECT(users))
+    try:
+        execute(INSERT(users).VALUES(u2))
+    except Exception as e:
+        print(e)
     execute(UPDATE(users).SET(email="user@web.com").WHERE(u2))
+    execute(INSERT(users).VALUES(u2))
     execute(SELECT(users))
 
 
