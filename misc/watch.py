@@ -47,7 +47,9 @@ class watch(INotify):
             try:
                 if self.chunked:
                     if not self.msgs:
-                        self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
+                        self.msgs.extend(
+                            self.read(chunked=True, chunk_size=self.chunk_size)
+                        )
                     return self.msgs.pop(0)
                 return self.read()
             except BlockingIOError:
@@ -59,7 +61,9 @@ class watch(INotify):
             try:
                 if self.chunked:
                     if not self.msgs:
-                        self.msgs.extend(self.read(chunked=True, chunk_size=self.chunk_size))
+                        self.msgs.extend(
+                            self.read(chunked=True, chunk_size=self.chunk_size)
+                        )
                     return self.msgs.pop(0)
                 return self.read()
             except BlockingIOError:
@@ -79,14 +83,16 @@ async def asyncwatcher(
     *paths, mask: int = INEvent.all(), chunked: bool = False, chunk_size: int = 4096
 ):
     try:
-        async with watch(*paths, mask=mask, chunked=chunked, chunk_size=chunk_size) as w:
-            print('ASYNCWATCHER :: WATCHING')
+        async with watch(
+            *paths, mask=mask, chunked=chunked, chunk_size=chunk_size
+        ) as w:
+            print("ASYNCWATCHER :: WATCHING")
             async for msg in w:
-                print('ASYNCWATCHER :: RECVD')
+                print("ASYNCWATCHER :: RECVD")
                 yield msg
-            print('ASYNCWATCHER :: EXITING')
+            print("ASYNCWATCHER :: EXITING")
     except asyncio.CancelledError:
-        print('ASNYNCWATCHER :: DONE')
+        print("ASNYNCWATCHER :: DONE")
 
 
 async def main():

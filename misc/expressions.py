@@ -2,7 +2,6 @@ import functools
 import typing
 import types
 
-
 T = typing.TypeVar("T")
 
 
@@ -19,11 +18,12 @@ class Encodable(typing.Generic[T], typing.Protocol):
 
 def encode_str(s, spec: str, **kwargs):
     match spec:
-        case 'pystr':
-            return repr(s) if kwargs.get('repr',  True) else str(s)
+        case "pystr":
+            return repr(s) if kwargs.get("repr", True) else str(s)
+
 
 __encoders__: dict[typing.Type, Encode] = {
-        object: lambda obj, spec=None, **kwargs: repr(obj),
+    object: lambda obj, spec=None, **kwargs: repr(obj),
 }
 
 
@@ -54,12 +54,11 @@ class Arguments(typing.NamedTuple):
     kwargs: dict
 
     def __encode__(self, spec: str, **kwargs):
-        a = (encode(a, spec, repr=True,  **kwargs) for a in self.args)
+        a = (encode(a, spec, repr=True, **kwargs) for a in self.args)
         kw = ((k, encode(v, spec, repr=True, **kwargs)) for k, v in self.kwargs.items())
         match spec:
-            case 'pystr':
+            case "pystr":
                 return f'{", ".join([*a, *(f"{k}={v}" for k, v in kw)])}'
-
 
 
 class MethodCall(typing.NamedTuple):
@@ -72,11 +71,11 @@ class MethodCall(typing.NamedTuple):
         method = self.method
         args = encode(self.args, spec, **kwargs)
         match spec:
-            case 'pystr':
+            case "pystr":
                 return f"{obj}.{method}({args})"
 
     def __repr__(self):
-        return encode(self, 'pystr')
+        return encode(self, "pystr")
 
 
 def Operator(symbol: str):
@@ -86,16 +85,18 @@ def Operator(symbol: str):
             obj = encode(self.obj, spec, **kwargs)
             arg = encode(self.args, spec, **kwargs)
             match spec:
-                case 'pystr':
+                case "pystr":
                     return f"({obj} {symbol} {arg})"
+
     return OperatorCall
+
 
 class GetAttributeCall(MethodCall):
     def __encode__(self, spec: str, **kwargs):
         obj = encode(self.obj, spec, **kwargs)
         args = encode(self.args, spec, **kwargs)
         match spec:
-            case 'pystr':
+            case "pystr":
                 return f"{obj}.{self.args.args[0]}"
 
 
@@ -104,8 +105,9 @@ class CallCall(MethodCall):
         obj = encode(self.obj, spec, **kwargs)
         arg = encode(self.args, spec, **kwargs)
         match spec:
-            case 'pystr':
+            case "pystr":
                 return f"{obj}({arg})"
+
 
 class MethodTracer:
     def __init__(self, trace: typing.Any):
@@ -122,7 +124,7 @@ class MethodTracer:
     def __repr__(self):
         return encode(self.trace)
 
-    def __encode__(self, spec: str = 'pystr', **kwargs):
+    def __encode__(self, spec: str = "pystr", **kwargs):
         return encode(self.trace, spec, **kwargs)
 
 
@@ -139,7 +141,7 @@ def trace(name: str):
 
 
 SPECIAL_METHOD = {
-    "__lt__": Operator('<'),
+    "__lt__": Operator("<"),
     "__le__": Operator("<="),
     "__eq__": Operator("=="),
     "__ne__": Operator("!="),

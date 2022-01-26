@@ -58,7 +58,7 @@ class INMessage:
     name: str
 
     @classmethod
-    def read(cls, fd: int) -> 'INMessage':
+    def read(cls, fd: int) -> "INMessage":
         bs = os.read(fd, cls.size)
         if not bs:
             raise ValueError("No data read.")
@@ -72,11 +72,11 @@ class INMessage:
         return cls(w, e, c, n)
 
     @classmethod
-    def read_chunk(cls, fd: int, chunk_size: int = 4096) -> list['INMessage']:
+    def read_chunk(cls, fd: int, chunk_size: int = 4096) -> list["INMessage"]:
         bs = os.read(fd, chunk_size)
         msgs = []
         while len(bs) >= cls.size:
-            w, m, c, l, bs = struct.unpack("iIII", bs[:cls.size]), bs[cls.size:]
+            w, m, c, l, bs = struct.unpack("iIII", bs[: cls.size]), bs[cls.size :]
             if l > 0:
                 n, bs = os.fsdecode(bytes(bs[:l]).rstrip(b"\x00")), bs[:l]
             else:
@@ -90,7 +90,7 @@ class INotify:
     in_init, in_add, in_rm = load_fns()
 
     def __init__(self, *paths: Path, mask: int = INEvent.all()):
-        print('IN :: INIT')
+        print("IN :: INIT")
         self.pathwds: dict[Path, int] = {}
         self.wdpaths: dict[int, Path] = {}
         self.fd = self.in_init(os.O_NONBLOCK)
@@ -100,7 +100,7 @@ class INotify:
         self.add(*paths, mask=mask)
 
     def add(self, *paths: Path, mask: int = INEvent.all()):
-        print('IN :: ADD')
+        print("IN :: ADD")
         for path in paths:
             if (wd := self.in_add(self.fd, bytes(path.resolve()), mask)) == -1:
                 raise ValueError(f"Adding watch on path {path} failed.")
@@ -121,6 +121,6 @@ class INotify:
         return INMessage.read(self.fd)
 
     def close(self):
-        print('IN :: CLOSE ')
+        print("IN :: CLOSE ")
         self.closed = True
         os.close(self.fd)
