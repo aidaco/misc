@@ -102,7 +102,7 @@ class CREATE:
                     f"({', '.join(map(lambda c: c.column_def, create.table.columns))})",
                     "IF NOT EXISTS" if not create.overwrite else None,
                 ]
-                if s != None
+                if s is not None
             )
             + ";"
         )
@@ -165,11 +165,11 @@ class SELECT:
 
     def __init__(select, table: TABLE, *subset: COLUMN):
         select.table = table
-        select.subset = subset
+        select.subset = list(subset)
         select.where = {}
 
     def DISTINCT(select, *subset: COLUMN):
-        select.subset = subset
+        select.subset = list(subset)
         select.distinct = True
         select.all = False
 
