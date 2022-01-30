@@ -2,32 +2,30 @@ from inspect import signature
 
 
 class typedispatch:
-    """Multiple dispatch for functions/methods using type annotations.
+    """Multiple dispatch for functions & methods using type annotations.
 
-    - Function:
-
-        >>>@typedispatch
-        >>>def foo(a: int, b: int):
-        >>>    return a + b
-        >>>
-        >>>@foo.overload
-        >>>def foo(a: int, b: str):
-        >>>    return str(a) + b
-        >>>
-        >>>class A:
-        >>>    @typedispatch
-        >>>    def foo(self, a: int, b: int):
-        >>>        return a + b
-        >>>
-        >>>    @foo.overload
-        >>>    def foo(self, a: int, b: str):
-        >>>        return str(a) + b
-        >>>
-        >>>a = A()
-        >>>assert foo(1, 2) == 3
-        >>>assert foo(1, '2') == '12'
-        >>>assert a.foo(1, 2) == 3
-        >>>assert a.foo(1, '2') == '12'
+    >>>@typedispatch
+    >>>def foo(a: int, b: int):
+    >>>    return a + b
+    >>>
+    >>>@foo.overload
+    >>>def foo(a: int, b: str):
+    >>>    return str(a) + b
+    >>>
+    >>>class A:
+    >>>    @typedispatch
+    >>>    def foo(self, a: int, b: int):
+    >>>        return a + b
+    >>>
+    >>>    @foo.overload
+    >>>    def foo(self, a: int, b: str):
+    >>>        return str(a) + b
+    >>>
+    >>>a = A()
+    >>>assert foo(1, 2) == 3
+    >>>assert foo(1, '2') == '12'
+    >>>assert a.foo(1, 2) == 3
+    >>>assert a.foo(1, '2') == '12'
     """
 
     def __init__(self, fn=None, table=None, instance=None):
