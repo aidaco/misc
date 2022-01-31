@@ -1,33 +1,11 @@
 from typing import Protocol, runtime_checkable, Any, Literal
 
 
-class identifier(str):
-    """Represents an identifier, which shouldn't be quoted in reprs."""
-
-    def __repr__(self):
-        return self
-
-
-def gettracestr(obj, default=None) -> str:
-    """Retrieve the objects trace."""
-    if not obj:
-        return default or ""
-    elif hasattr(obj, "__trace__"):
-        return obj.__trace__()
-    else:
-        return repr(obj)
-
-
 @runtime_checkable
 class Traceable(Protocol):
     __boxed__: Any
     __child__: Any
     __contains_trace__: bool
-
-
-def tracevar(name: str) -> Trace:
-    """Return a trace rooted on a str representing an identifier."""
-    return Trace(identifier(name))
 
 
 class Trace:
@@ -38,7 +16,9 @@ class Trace:
 
     def __repr__(self):
         if self.__parent__:
-            prepr = "\n" + "\n".join(f"\t{line}" for line in repr(self.__parent__).split("\n"))
+            prepr = "\n" + "\n".join(
+                f"\t{line}" for line in repr(self.__parent__).split("\n")
+            )
         else:
             prepr = ""
         return f"Trace {repr(self.__obj__)}:{prepr}"
@@ -53,7 +33,7 @@ class Trace:
         selfget = super().__getattribute__
         sourceget = boxedget = lambda n: getattr(selfget("__boxed__"), flag)
 
-        attr = boxedget(name) # Load from boxed first
+        attr = boxedget(name)  # Load from boxed first
         if attr is flag:  # Handle name not found in boxed
             try:
                 attr = selfget(name)  # Load from self second
@@ -66,7 +46,7 @@ class Trace:
                     raise
 
         # Need to check is not default implementation from object
-        if cattr := getattr(sourceget('__class__'), name):
+        if cattr := getattr(sourceget("__class__"), name):
             if cattr is getattr(object, name, object()) and self.__trace_full__:
                 # If the attr is the default implementation, insert an identifier trace.
                 return Trace(identifier(name), self, self.__trace_all__)
@@ -94,3 +74,25 @@ class CallTrace(Trace):
         kwargs = (f"{k}={gettracestr(v)}" for k, v in self.__kwargs__.items())
         args = ", ".join([*map(gettracestr, self.__args__), *kwargs])
         return f"{super().__trace__()}({args})"
+
+
+class identifier(str):
+    """Represents an identifier, which shouldn't be quoted in reprs."""
+
+    def __repr__(self):
+        return self
+
+
+def tracevar(name: str) -> Trace:
+    """Return a trace rooted on a str representing an identifier."""
+    return Trace(identifier(name))
+
+
+def gettracestr(obj, default=None) -> str:
+    """Retrieve the objects trace."""
+    if not obj:
+        return default or ""
+    elif hasattr(obj, "__trace__"):
+        return obj.__trace__()
+    else:
+        return repr(obj)

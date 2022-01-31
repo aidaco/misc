@@ -25,7 +25,7 @@ def loadclsdoc(n: ast.ClassDef) -> tuple[str, dict[str, str]]:
         clsdoc = e.value.value
     mthdocs, intclsdocs = {}, {}
     for e in n.body[1:]:
-        match e:
+        match e:  # type: ignore
             case ast.FunctionDef():
                 mthdocs[e.name] = loadfndoc(e)
             case ast.ClassDef():
