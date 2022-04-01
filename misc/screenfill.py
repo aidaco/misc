@@ -60,9 +60,9 @@ def screenfill(
 
 
 def circle(width: int, height: int, percent: float) -> list[list[bool]]:
-    radius = math.sqrt(width ** 2 + height ** 2) * percent
+    radius = math.sqrt(width**2 + height**2) * percent
     return [
-        [math.sqrt(x ** 2 + y ** 2) <= radius for x in range(width)]
+        [math.sqrt(x**2 + y**2) <= radius for x in range(width)]
         for y in range(height)
     ]
 
