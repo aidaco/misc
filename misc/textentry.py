@@ -118,7 +118,7 @@ class DictEntry(App):
 
     async def on_mount(self) -> None:
         grid = await self.view.dock_grid(edge="bottom", name="left")
-        grid.add_column("left", fraction=1, min_size=20)
+        grid.add_column("left", fraction=1)
         for n in range(len(self.entries)):
             grid.add_row(str(n), fraction=1)
 
