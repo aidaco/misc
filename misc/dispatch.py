@@ -123,7 +123,7 @@ class SignatureLookup:
             else:
                 return fn
         else:
-            raise TypeError(f"No matches found for {[*args]}, {**kwargs}")
+            raise TypeError(f"No matches found for {args}, {kwargs}")
 
 
 class FullTypeLookup(SignatureLookup):
@@ -149,7 +149,7 @@ class FullTypeLookup(SignatureLookup):
             except TypeError:
                 continue
         else:
-            raise TypeError(f"No matches found for {[*args]}, {**kwargs}")
+            raise TypeError(f"No matches found for {args}, {kwargs}")
 
 
 default_lookup = FullTypeLookup
