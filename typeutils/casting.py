@@ -1,14 +1,5 @@
 from inspect import signature
-from typing import (
-    Callable,
-    Type,
-    TypeVar,
-    runtime_checkable,
-    Generic,
-    Protocol,
-    Any,
-)
-
+from typing import Any, Callable, Generic, Protocol, Type, TypeVar, runtime_checkable
 
 From = TypeVar("From", contravariant=True)
 To = TypeVar("To", covariant=True)

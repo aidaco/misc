@@ -1,16 +1,16 @@
-from rich import print
-import uuid
-from passlib.hash import argon2
-from datetime import datetime, timedelta
-import dateutil.parser
-from dataclasses import dataclass, field
 import dataclasses
-import typing
 import logging
+import typing
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from jose import jwe
+import dateutil.parser
 import fastapi
+from jose import jwe
+from passlib.hash import argon2
+from rich import print
 
 log = logging.getLogger(__name__)
 api = fastapi.FastAPI()

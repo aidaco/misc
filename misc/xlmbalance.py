@@ -1,7 +1,8 @@
-from functools import cache
-import aiohttp
 import asyncio
 import sys
+from functools import cache
+
+import aiohttp
 from rich import print
 
 

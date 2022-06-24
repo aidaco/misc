@@ -1,6 +1,6 @@
 import ast
-import re
 import pathlib
+import re
 
 
 def dechevron(doc: str):

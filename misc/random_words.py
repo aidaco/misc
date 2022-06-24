@@ -2,11 +2,11 @@
 
 Aidan Courtney, 2021"""
 
-from pathlib import Path
 import random
 from argparse import ArgumentParser, ArgumentTypeError
-from typing import Iterator
 from itertools import groupby
+from pathlib import Path
+from typing import Iterator
 
 DEFAULT_WORDLIST = Path(__file__).parent / "words.txt"
 DEFAULT_COUNT = 5

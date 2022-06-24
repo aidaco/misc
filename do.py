@@ -1,7 +1,8 @@
-import typer
-import sys
-import subprocess
 import glob
+import subprocess
+import sys
+
+import typer
 
 cli = typer.Typer()
 

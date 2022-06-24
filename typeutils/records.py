@@ -1,9 +1,10 @@
-import typing
 import dataclasses
-import uuid
 import datetime
-import dateutil.parser
 import pathlib
+import typing
+import uuid
+
+import dateutil.parser
 from rich import print
 
 

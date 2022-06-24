@@ -43,7 +43,7 @@ Usage:
 """
 
 from inspect import signature
-from typing import Type, Callable, Any, TypeVar, Generic, Protocol, runtime_checkable
+from typing import Any, Callable, Generic, Protocol, Type, TypeVar, runtime_checkable
 
 
 def dispatch(lookupcls_or_fn: Lookup | Callable) -> Callable[..., Dispatch] | Dispatch:

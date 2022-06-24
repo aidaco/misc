@@ -3,8 +3,8 @@
 Aidan Courtney, 2021."""
 
 import time
-from pathlib import Path
 from argparse import ArgumentParser, ArgumentTypeError
+from pathlib import Path
 
 from rich.console import Console
 

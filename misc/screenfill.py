@@ -2,11 +2,12 @@
 
 Aidan Courtney, 2021."""
 
-import time
 import math
 import random
-from itertools import combinations, chain
+import time
+from itertools import chain, combinations
 from typing import Callable
+
 from blessed import Terminal
 
 

@@ -1,4 +1,4 @@
-from typing import Protocol, runtime_checkable, Any, Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 @runtime_checkable

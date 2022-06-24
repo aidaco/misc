@@ -1,5 +1,5 @@
-from inspect import Signature, Parameter
 from functools import reduce
+from inspect import Parameter, Signature
 
 
 def parameter(n, t):
