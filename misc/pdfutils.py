@@ -60,7 +60,7 @@ def rotate_page(pdf_path: Path, index: int, angle, dest: Path | None = None):
             p if i != index else p.rotateClockwise(angle)
             for i, p in enumerate(r_pdf.pages)
         ]
-        for i, p in enuerate(r_pdf.pages):
+        for i, p in enumerate(r_pdf.pages):
             if i != index:
                 w_pdf.add_page(p)
             else:
@@ -71,3 +71,4 @@ def rotate_page(pdf_path: Path, index: int, angle, dest: Path | None = None):
             w_pdf.write(w_io)
 
 
+__all__ = ['show', 'copy_pages', 'merge', 'rotate_page']
