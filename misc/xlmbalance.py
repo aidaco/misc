@@ -78,14 +78,15 @@ async def display_balances(account_id):
     balances = account["balances"]
     holdings = []
     for b in balances:
-        match b["asset_type"]:
-            case "credit_alphanum4" | "credit_alphanum12":
-                holding = await parse_credit_balance(b)
-            case "liquidity_pool_shares":
-                holding = await parse_lp_balance(b)
-            case "native":
-                holding = "XLM", float(b["balance"]), float(b["balance"])
-        holdings.append(holding)
+        if float(b['balance']) > 0:
+            match b["asset_type"]:
+                case "credit_alphanum4" | "credit_alphanum12":
+                    holding = await parse_credit_balance(b)
+                case "liquidity_pool_shares":
+                    holding = await parse_lp_balance(b)
+                case "native":
+                    holding = "XLM", float(b["balance"]), float(b["balance"])
+            holdings.append(holding)
 
     for label, amount, xlm_eq in reversed(sorted(holdings, key=lambda t: t[2])):
         print(f"{amount:8.4f} {label.ljust(15)} ≈ {xlm_eq:8.4f} XLM")

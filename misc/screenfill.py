@@ -57,7 +57,7 @@ def screenfill(
         output = "\n".join(
             "".join(char if flag else " " for flag in row) for row in should_fill
         )
-        print(terminal.clear + terminal.home + output)
+        print(terminal.home + output)
 
 
 def circle(width: int, height: int, percent: float) -> list[list[bool]]:
