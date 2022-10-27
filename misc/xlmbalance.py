@@ -10,6 +10,8 @@ import contextlib
 
 import aiohttp
 from rich.table import Table
+from rich.panel import Panel
+from rich.console import Group
 from rich import print
 import typer
 
@@ -146,6 +148,47 @@ def add(pubkey: str, dbfile: Path = DEFAULTDB):
     with sqlite3.connect(dbfile) as connection:
         ensuredb(connection)
         connection.execute('INSERT INTO updates (pubkey, added_at) VALUES (?, ?)', (pubkey, datetime.now().isoformat()))
+
+@db.command()
+def view(dbfile: Path = DEFAULTDB):
+    with sqlite3.connect(dbfile) as connection:
+        ensuredb(connection)
+        tracking = [*connection.execute('SELECT pubkey, added_at FROM updates;')]
+        rows = [*connection.execute('SELECT pubkey, datetime, xlmprice, data FROM holdings;')]
+
+    t = Table(title='Tracking')
+    t.add_column('PUBKEY')
+    t.add_column('ADDED')
+    for pk, dt in tracking:
+        t.add_row(pk, dt)
+
+    print(t)
+
+    values = (
+        (
+            pk,
+            dt,
+            sum(
+                x*xp
+                for _, _, x in json.loads(d)
+            )
+        )
+        for pk, dt, xp, d in rows
+    )
+
+    series = {}
+    for pk, dt, val in values:
+        series[pk] = series.get(pk, [])
+        series[pk].append((dt, val))
+
+    for pk, vals in series.items():
+        t = Table(title=pk)
+        t.add_column('Datetime')
+        t.add_column('Value')
+        for dt, val in vals:
+            t.add_row(dt, f'{val:.2f}')
+        print(t)
+
 
 @db.command()
 def update(dbfile: Path = DEFAULTDB):
