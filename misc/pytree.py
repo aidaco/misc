@@ -1,25 +1,33 @@
 import typer
 from rich.console import Console, Group
 from rich.panel import Panel
+from rich.table import Table
 import ast
+from types import MethodType
+from functools import partial
 from pathlib import Path
 
 app = typer.Typer()
 
 @app.command()
 def tree(cwd: Path = Path.cwd()):
-    Console().print(_tree(cwd))
+    Console().print(_RichView(_tree, cwd))
+
+class _RichView:
+    def __init__(self, fn, *args, **kwargs):
+        self.fn = fn
+        self.args, self.kwargs = args, kwargs
+    def __rich_console__(self, console, options):
+        yield from self.fn(*self.args, **self.kwargs)
 
 def _tree(cwd: Path = Path.cwd()):
-    lines = []
     for file in Path(cwd).iterdir():
         if file.name.startswith('.') or file.name.startswith('_'):
             continue
         elif file.is_dir() and next(file.iterdir(), None):
-            lines.append(_display(f'[bold white]{file.name}[/]', lines=[_tree(file)], dark=False))
+            yield _display(f'[bold white]{file.name}[/]', lines=_tree(file), dark=False)
         elif file.suffix == '.py':
-            lines.append(_display(f'[bold white]{file.name}[/]', lines=_getdefines(file)))
-    return Group(*lines)
+            yield _display(f'[bold white]{file.name}[/]', lines=_getdefines(file))
 
 def _getdefines(pyfile: Path) -> list:
     for node in ast.parse(pyfile.read_text()).body:
