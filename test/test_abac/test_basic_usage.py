@@ -2,10 +2,12 @@ import pytest
 
 import misc.abac
 
+
 def test_core_system():
     pip = misc.abac.PolicyInformationPoint()
     pdp = misc.abac.PolicyDecisionPoint(pip)
     pep = misc.abac.PolicyEnforcementPoint(pdp)
+
 
 def test_dataclass_models():
     @dataclass

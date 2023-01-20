@@ -10,6 +10,7 @@ class Database:
         for k, v in self.tables.items():
             setattr(self, k, v)
 
+
 class Table:
     def __init__(self, name: str, model: Type):
         self.name = name
@@ -17,7 +18,11 @@ class Table:
 
     def init(self):
         stmt = f"CREATE TABLE IF NOT EXISTS {self.name}"
-        stmt += "(id text primary key," + ",".join(f"{f.name} {f.type}" for f in self.fields) + ")"
+        stmt += (
+            "(id text primary key,"
+            + ",".join(f"{f.name} {f.type}" for f in self.fields)
+            + ")"
+        )
         stmt += ";"
         print(stmt)
 
