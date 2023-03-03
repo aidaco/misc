@@ -1,12 +1,10 @@
-import time
-import threading
-from threading import Thread
-import os
 import asyncio
-import itertools
+import os
 import queue
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-from collections import deque
+import threading
+import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from threading import Thread
 
 
 def iscan(path):
@@ -89,7 +87,7 @@ def split_dirs(entries):
                 dappend(entry.path)
             else:
                 fappend(entry.path)
-        except OSError as e:
+        except OSError:
             continue
     return dirs, files
 

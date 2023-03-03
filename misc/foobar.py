@@ -34,6 +34,8 @@ def solve(tiles):
 get_ipython().run_line_magic('whos', '')
 solve(test[0])
 import sys
+
+
 def _get_moves(tiles, cur):
     pos = cur[0]
     pts = [
@@ -55,6 +57,7 @@ def _dist(p1, p2):
     
 solve(test[0])
 from math import sqrt
+
 solve(test[0])
 def _get_moves(tiles, cur):
     pos = cur[0]

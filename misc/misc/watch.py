@@ -218,7 +218,6 @@ async def asyncwatcher(
 
 
 async def main():
-    loop = asyncio.get_running_loop()
     events = []
     tmp_dir = Path(tempfile.mkdtemp())
 
@@ -236,7 +235,7 @@ async def main():
     task.cancel()
     await task
     print("MAIN :: Stopped watcher")
-    print(f"MAIN :: Received Events:")
+    print("MAIN :: Received Events:")
     print("", *(str(event) for event in events), sep="\n\t")
 
 

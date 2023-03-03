@@ -1,15 +1,11 @@
-import functools
-import inspect
-import itertools
 import re
-import typing
 
 # Disable PyPDF warnings
 import warnings
 from pathlib import Path
 
 import typer
-from PyPDF2 import PdfFileMerger, PdfFileReader, PdfFileWriter
+from PyPDF2 import PdfReader, PdfWriter
 from rich.console import Console
 from rich.panel import Panel
 
@@ -25,7 +21,7 @@ def show(pdf_path: Path) -> None:
 
     console = Console()
     with pdf_path.open("rb") as io:
-        pdf = PdfFileReader(io)
+        pdf = PdfReader(io)
         for i, pg in enumerate(pdf.pages):
             console.print(Panel(pg.extractText(), title=f"{i+1}"))
 
@@ -39,9 +35,9 @@ def nsplit(pdf: Path, wd: Path):
     2-threepages.pdf
     3-threepages.pdf
     """
-    f = PdfFileReader(pdf.open("rb"))
+    f = PdfReader(pdf.open("rb"))
     for i, pg in enumerate(f.pages):
-        w = PdfFileWriter()
+        w = PdfWriter()
         w.add_page(pg)
         o = pdf.with_stem(f"{i}-{pdf.stem}")
         w.write(o)
@@ -59,15 +55,37 @@ def nmerge(pdf: Path, wd: Path):
 
     Will will merge the 3 documents into one.
     """
-    o = PdfFileWriter()
+    o = PdfWriter()
     pdfs = wd.glob("*.pdf")
-    matches = lambda s: re.match("(\d+)[^\d].*", str(s)) is not None
-    num = lambda s: int(re.match("(\d+)[^\d].*", str(s)).group(1))
+
+    def matches(s):
+        return re.match("(\\d+)[^\\d].*", str(s)) is not None
+
+    def num(s):
+        return int(re.match("(\\d+)[^\\d].*", str(s)).group(1))
+
     for f in sorted((p for p in pdfs if matches(p)), key=num):
         print(f)
-        for pg in PdfFileReader(f).pages:
-            o.addPage(pg)
+        for pg in PdfReader(f).pages:
+            o.add_page(pg)
     o.write(pdf.open("wb"))
+
+
+@cli.command()
+def interleave(pdfs: list[Path], out: Path):
+    """Cycle through pdfs, taking one page from each per round.
+    Will merge a double-sided document scanned as fronts and backs."""
+
+    inputs, output = [PdfReader(p) for p in pdfs], PdfWriter()
+    page = 0
+    while True:
+        current = [pdf for pdf in inputs if page < pdf.numPages]
+        if not current:
+            break
+        for pdf in current:
+            output.add_page(pdf.getPage(page))
+        page += 1
+    output.write(out)
 
 
 if __name__ == "__main__":
