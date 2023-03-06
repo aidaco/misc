@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 import os
 
+
 def iterfiles(root):
     dirs = [root]
     while dirs:
@@ -20,20 +21,22 @@ def iterfiles(root):
 
 
 def create_index(root, path):
-    with open(path, 'w') as file:
+    with open(path, "w") as file:
         for path in iterfiles(root):
-            file.write(path+'\n')
+            file.write(path + "\n")
+
 
 def iterindex(path):
     with open(path) as file:
         yield from (line.strip() for line in file)
 
+
 def iterindex_preload(path):
     with open(path) as file:
         content = file.read()
 
-
         yield from (line.strip() for line in file)
+
 
 def chunked(size, it):
     i, chunk = 0, []
@@ -45,16 +48,18 @@ def chunked(size, it):
             yield chunk
             i, chunk = 0, []
 
+
 def search_index(pat, path):
     pat = re.compile(pat)
     yield from (p for p in iterindex(path) if pat.match(p))
 
+
 def search_index_chunked(pat, path, size=10000):
     pat = re.compile(pat)
     for paths in (
-        path for chunk in chunked(size, iterindex(path))
+        path
+        for chunk in chunked(size, iterindex(path))
         for path in chunk
         if pat.match(path)
-        ):
+    ):
         yield from paths
-
