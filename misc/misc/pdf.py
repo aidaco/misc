@@ -15,19 +15,35 @@ warnings.filterwarnings("ignore")
 cli = typer.Typer()
 
 
+def _iter_numbered_pdfs(wd: Path) -> list[Path]:
+    num_pdf_re = r"(\d+)[^\d].*\.pdf"
+    pdfs = wd.glob("*.pdf")
+    pdfs = (
+        (int(m.group(1)), p) for p in pdfs if (m := re.match(num_pdf_re, str(p.name)))
+    )
+    pdfs = (p[1] for p in sorted(pdfs))
+    yield from pdfs
+
+
+def _iterprint(it):
+    for i in it:
+        print(i)
+        yield i
+
+
 @cli.command()
-def show(pdf_path: Path) -> None:
+def show(src: Path) -> None:
     """Attempt to display text content of PDF."""
 
     console = Console()
-    with pdf_path.open("rb") as io:
-        pdf = PdfReader(io)
-        for i, pg in enumerate(pdf.pages):
-            console.print(Panel(pg.extractText(), title=f"{i+1}"))
+    reader = PdfReader(src)
+    for i, page in enumerate(reader.pages):
+        content = Panel(page.extractText(), title=f"{i+1}")
+        console.print(content)
 
 
 @cli.command()
-def nsplit(pdf: Path, wd: Path):
+def nsplit(src: Path, wd: Path = Path.cwd()):
     """Split the document into single-page documents.
 
     For example, nsplit('threepages.pdf') produces:
@@ -35,17 +51,17 @@ def nsplit(pdf: Path, wd: Path):
     2-threepages.pdf
     3-threepages.pdf
     """
-    f = PdfReader(pdf.open("rb"))
-    for i, pg in enumerate(f.pages):
-        w = PdfWriter()
-        w.add_page(pg)
-        o = pdf.with_stem(f"{i}-{pdf.stem}")
-        w.write(o)
-        print(f"./{o.relative_to(wd)}")
+    reader = PdfReader(src)
+    for i, page in enumerate(reader.pages):
+        writer = PdfWriter()
+        writer.add_page(page)
+        dest = src.with_stem(f"{i}-{src.stem}")
+        writer.write(dest)
+        print(f"./{dest.relative_to(wd)}")
 
 
 @cli.command()
-def nmerge(pdf: Path, wd: Path):
+def nmerge(dest: Path, wd: Path = Path.cwd()):
     """Merge a document from numbered segments.
 
     For example, nmerge() with a directory that contains:
@@ -55,37 +71,31 @@ def nmerge(pdf: Path, wd: Path):
 
     Will will merge the 3 documents into one.
     """
-    o = PdfWriter()
-    pdfs = wd.glob("*.pdf")
 
-    def matches(s):
-        return re.match("(\\d+)[^\\d].*", str(s)) is not None
-
-    def num(s):
-        return int(re.match("(\\d+)[^\\d].*", str(s)).group(1))
-
-    for f in sorted((p for p in pdfs if matches(p)), key=num):
-        print(f)
-        for pg in PdfReader(f).pages:
-            o.add_page(pg)
-    o.write(pdf.open("wb"))
+    writer = PdfWriter()
+    for src in _iterprint(_iter_numbered_pdfs(wd)):
+        for page in PdfReader(src).pages:
+            writer.add_page(page)
+    writer.write(dest)
 
 
 @cli.command()
-def interleave(pdfs: list[Path], out: Path):
-    """Cycle through pdfs, taking one page from each per round.
+def interleave(dest: Path, wd: Path = Path.cwd()):
+    """Cycle through numbered pdfs in the current directory, taking one page from each per round.
     Will merge a double-sided document scanned as fronts and backs."""
 
-    inputs, output = [PdfReader(p) for p in pdfs], PdfWriter()
+    iter_inputs = _iterprint(_iter_numbered_pdfs(wd))
+    readers = [PdfReader(p) for p in iter_inputs]
+    writer = PdfWriter()
     page = 0
     while True:
-        current = [pdf for pdf in inputs if page < pdf.numPages]
-        if not current:
+        readers = [i for i in readers if page < i.numPages]
+        if not readers:
             break
-        for pdf in current:
-            output.add_page(pdf.getPage(page))
+        for reader in readers:
+            writer.add_page(reader.getPage(page))
         page += 1
-    output.write(out)
+    writer.write(dest)
 
 
 if __name__ == "__main__":
