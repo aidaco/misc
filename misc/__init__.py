@@ -1,2 +1,1 @@
 """Miscellaneous personal utilities."""
-

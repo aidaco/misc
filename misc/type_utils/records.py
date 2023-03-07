@@ -12,8 +12,10 @@ from rich import print
 class TypeMap:
     pytype: typing.Type
     sqltype: str
+
     def ser(o):
         return o
+
     def deser(o):
         return o
 
