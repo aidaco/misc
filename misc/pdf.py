@@ -1,10 +1,11 @@
+"""CLI for simple PDF manipulation utilities."""
+
 import functools
 import inspect
 import itertools
 import re
 import typing
 
-# Disable PyPDF warnings
 import warnings
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from PyPDF2 import PdfFileMerger, PdfFileReader, PdfFileWriter
 from rich.console import Console
 from rich.panel import Panel
 
+# Disable PyPDF warnings
 warnings.filterwarnings("ignore")
 
 

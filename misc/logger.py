@@ -1,3 +1,5 @@
+"""The logger for this package."""
+
 import logging
 
 from rich.logging import RichHandler

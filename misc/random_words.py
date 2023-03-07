@@ -1,6 +1,4 @@
-"""Quick utility for retrieving random words.
-
-Aidan Courtney, 2021"""
+"""Utility for retrieving random words."""
 
 import random
 from argparse import ArgumentParser, ArgumentTypeError
@@ -61,7 +59,7 @@ def main():
     parser.add_argument("n", type=int, nargs="?", default=DEFAULT_COUNT)
     parser.add_argument("-w", "--wordlist", type=file_path, default=DEFAULT_WORDLIST)
     args = parser.parse_args()
-    words = random_words(args.wordlist, args.n)
+    words = random_words(args.n, args.wordlist)
     print(words)
 
 

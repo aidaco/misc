@@ -1,3 +1,6 @@
+"""FastAPI + SQLite Account system Skeleton."""
+
+
 import dataclasses
 import logging
 import typing

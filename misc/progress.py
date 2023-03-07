@@ -1,3 +1,5 @@
+"""Simple progress bar."""
+
 import time
 from dataclasses import dataclass
 from math import floor
@@ -13,8 +15,8 @@ from rich.table import Table
 
 @dataclass
 class Progress:
-    status: int
     total: int
+    status: int = 0
     width: int = 25
 
     @property
@@ -33,33 +35,26 @@ class Progress:
         wright = self.width - wleft
         stars = "█" * wleft
         spaces = " " * wright
-        return f"[bold yellow]|[/][bold cyan]{stars}{spaces}[/][bold yellow]|[/]"
+        return f"[bold yellow]|[/][bold cyan]{stars}{spaces}[/][bold yellow]|[/][{self.ratio * 100: >5.1f}%]"
+
+    def iter(self, it):
+        with Live(self, refresh_per_second=30, transient=True):
+            for i in it:
+                yield i
+                self.tick()
 
 
-class PThread(Thread):
-    def __init__(self, progress, dur):
-        self.progress = progress
-        self.inter = dur / progress.total
-        super().__init__()
+def spin(dur, n=1000):
+    inter = dur / n
+    def _count_timer():
+        for i in range(n):
+            time.sleep(inter)
+            yield i
 
-    def __rich__(self):
-        return f"[{self.progress.ratio * 100:.1f}]"
-
-    def run(self):
-        while not self.progress.done:
-            self.progress.tick()
-            time.sleep(self.inter)
+    p = Progress(n)
+    for _ in p.iter(_count_timer()):
+        ...
 
 
-def run(dur, total):
-    p = Progress(0, total)
-    pt = PThread(p, dur)
-    t = Table("Progress", "Value")
-    t.add_row(p, pt)
-    with Live(t, refresh_per_second=30, transient=True):
-        pt.start()
-        pt.join()
-    print(f"Finished {p.total}")
-
-
-run(1, 1000)
+if __name__ == "__main__":
+    spin(5)
