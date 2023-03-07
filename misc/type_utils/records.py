@@ -12,8 +12,10 @@ from rich import print
 class TypeMap:
     pytype: typing.Type
     sqltype: str
-    ser: typing.Callable = lambda o: o
-    deser: typing.Callable = lambda o: o
+    def ser(o):
+        return o
+    def deser(o):
+        return o
 
     @classmethod
     def complete_mapping(cls, *ts):

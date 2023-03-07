@@ -1,5 +1,4 @@
 import typing
-import functools
 from dataclasses import dataclass
 
 

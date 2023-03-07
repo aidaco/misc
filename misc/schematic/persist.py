@@ -1,4 +1,4 @@
-from .schema import SchemaInfo, FieldInfo
+from .schema import SchemaInfo
 
 SQL_TYPES = {
     bool: "INTEGER",

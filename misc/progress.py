@@ -2,15 +2,8 @@
 
 import time
 from dataclasses import dataclass
-from math import floor
-from threading import Thread
 
-from rich.columns import Columns
-from rich.console import Group
 from rich.live import Live
-from rich.panel import Panel
-from rich.segment import Segment
-from rich.table import Table
 
 
 @dataclass
@@ -46,6 +39,7 @@ class Progress:
 
 def spin(dur, n=1000):
     inter = dur / n
+
     def _count_timer():
         for i in range(n):
             time.sleep(inter)

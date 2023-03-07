@@ -1,16 +1,11 @@
 """CLI for simple PDF manipulation utilities."""
 
-import functools
-import inspect
-import itertools
 import re
-import typing
-
 import warnings
 from pathlib import Path
 
 import typer
-from PyPDF2 import PdfFileMerger, PdfFileReader, PdfFileWriter
+from PyPDF2 import PdfFileReader, PdfFileWriter
 from rich.console import Console
 from rich.panel import Panel
 
@@ -63,8 +58,10 @@ def nmerge(pdf: Path, wd: Path):
     """
     o = PdfFileWriter()
     pdfs = wd.glob("*.pdf")
-    matches = lambda s: re.match("(\d+)[^\d].*", str(s)) is not None
-    num = lambda s: int(re.match("(\d+)[^\d].*", str(s)).group(1))
+    def matches(s):
+        return re.match("(\\d+)[^\\d].*", str(s)) is not None
+    def num(s):
+        return int(re.match("(\\d+)[^\\d].*", str(s)).group(1))
     for f in sorted((p for p in pdfs if matches(p)), key=num):
         print(f)
         for pg in PdfFileReader(f).pages:

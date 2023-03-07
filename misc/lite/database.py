@@ -1,6 +1,6 @@
+import uuid
 from dataclasses import fields
 from typing import Type
-import uuid
 
 
 class Database:
