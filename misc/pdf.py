@@ -58,10 +58,13 @@ def nmerge(pdf: Path, wd: Path):
     """
     o = PdfFileWriter()
     pdfs = wd.glob("*.pdf")
+
     def matches(s):
         return re.match("(\\d+)[^\\d].*", str(s)) is not None
+
     def num(s):
         return int(re.match("(\\d+)[^\\d].*", str(s)).group(1))
+
     for f in sorted((p for p in pdfs if matches(p)), key=num):
         print(f)
         for pg in PdfFileReader(f).pages:
