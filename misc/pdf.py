@@ -5,7 +5,7 @@ import warnings
 from pathlib import Path
 
 import typer
-from PyPDF2 import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter
 from rich.console import Console
 from rich.panel import Panel
 

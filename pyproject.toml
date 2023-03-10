@@ -7,6 +7,9 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.10"
+typer = "^0.7.0"
+rich = "^13.3.2"
+pypdf = "^3.5.1"
 
 [tool.poetry.dev-dependencies]
 
