@@ -90,7 +90,7 @@ def interleave(dest: Path, wd: Path = Path.cwd()):
     writer = PdfWriter()
     page = 0
     while True:
-        readers = [i for i in readers if page < i.numPages]
+        readers = [i for i in readers if page < len(i.pages)]
         if not readers:
             break
         for reader in readers:
@@ -103,10 +103,10 @@ def _duplexify(front: Path, back: Path, out: Path):
     writer = PdfWriter()
     page = 0
     while True:
-        if page == front.numPages:
+        if page == len(front.pages):
             break
         writer.add_page(front.pages[page])
-        if page < back.numPages:
+        if page < len(back.pages):
             writer.add_page(back.pages[::-1][page])
         page += 1
     writer.write(out)
