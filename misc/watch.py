@@ -220,7 +220,6 @@ async def asyncwatcher(
 
 
 async def main():
-    asyncio.get_running_loop()
     events = []
     tmp_dir = Path(tempfile.mkdtemp())
 
