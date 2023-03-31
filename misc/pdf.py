@@ -98,6 +98,13 @@ def interleave(dest: Path, wd: Path = Path.cwd()):
         page += 1
     writer.write(dest)
 
+
+def _get_matching_paths(matcher, wd, pattern):
+    for path in wd.glob(pattern):
+        if result := matcher(path.name):
+            yield (result, path)
+
+
 def _duplexify(front: Path, back: Path, out: Path):
     front, back = PdfReader(front), PdfReader(back)
     writer = PdfWriter()
@@ -111,6 +118,7 @@ def _duplexify(front: Path, back: Path, out: Path):
         page += 1
     writer.write(out)
 
+
 @cli.command()
 def duplexify(wd: Path = Path.cwd()):
     """Takes simplex front and reverse simplex back and joins to duplex.
@@ -121,24 +129,36 @@ def duplexify(wd: Path = Path.cwd()):
     Result:
         abc.pdf
     """
-    
 
-    pdfs = list(wd.glob('*.pdf'))
-    front_re = r'(.*?)\s*front.pdf'
-    for pdf in pdfs:
-        if not (m := re.match(front_re, pdf.name, re.IGNORECASE)):
-            continue
-        name = m.group(1)
-        back_re = rf'{name}\s*back.pdf'
-        back = [p for p in pdfs if re.match(back_re, p.name, re.IGNORECASE)][0]
-        if not back:
-            print(f'No back for front {pdf}')
-            continue
-        out = pdf.with_stem(name)
-        print(f'Duplexify "{out.name}"')
-        _duplexify(pdf, back, out)
-        pdf.unlink()
+    duplex_re = r"(.*?)\s*{}.pdf"
+    def match_front(s):
+        return m.group(1) if (m := re.match(duplex_re.format("front"), s, re.IGNORECASE)) else None
+    def match_back(s):
+        return m.group(1) if (m := re.match(duplex_re.format("back"), s, re.IGNORECASE)) else None
+    fronts = {
+        name: path for name, path in _get_matching_paths(match_front, wd, "*.pdf")
+    }
+    backs = {name: path for name, path in _get_matching_paths(match_back, wd, "*.pdf")}
+    sfronts, sbacks = set(fronts), set(backs)
+    sduplexes = sfronts & sbacks
+
+    if no_backs := sfronts - sduplexes:
+        print("Missing back scans for:")
+        print(*("\t" + fronts[name].name for name in no_backs), sep="\n")
+
+    if no_fronts := sbacks - sduplexes:
+        print("Missing front scans for:")
+        print(*("\t" + backs[name].name for name in no_fronts), sep="\n")
+
+    pdfs = ((fronts[name], backs[name], name) for name in sduplexes)
+    for front, back, name in pdfs:
+        out = front.with_stem(name)
+        print(f'Writing "{out.name}"...', end="")
+        _duplexify(front, back, out)
+        print("\r" f'Wrote "{out.name}".')
+        front.unlink()
         back.unlink()
-        
+
+
 if __name__ == "__main__":
     cli()
