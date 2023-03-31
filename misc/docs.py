@@ -1,3 +1,5 @@
+"""Like a custom doctest."""
+
 import ast
 import pathlib
 import re

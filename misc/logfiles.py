@@ -1,6 +1,4 @@
-"""Brief fun with rich's logging features. Walks through files and logs their names.
-
-Aidan Courtney, 2021."""
+"""Walks through files and logs their names. Example usage of rich logger."""
 
 import time
 from argparse import ArgumentParser, ArgumentTypeError

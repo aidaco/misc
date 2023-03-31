@@ -1,3 +1,5 @@
+"""FFI Wrapper for inotify."""
+
 import asyncio
 import ctypes
 import os

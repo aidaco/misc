@@ -1,14 +1,15 @@
-import re
+"""CLI for simple PDF manipulation utilities."""
 
-# Disable PyPDF warnings
+import re
 import warnings
 from pathlib import Path
 
 import typer
-from PyPDF2 import PdfReader, PdfWriter
+from pypdf import PdfReader, PdfWriter
 from rich.console import Console
 from rich.panel import Panel
 
+# Disable PyPDF warnings
 warnings.filterwarnings("ignore")
 
 
@@ -89,7 +90,7 @@ def interleave(dest: Path, wd: Path = Path.cwd()):
     writer = PdfWriter()
     page = 0
     while True:
-        readers = [i for i in readers if page < i.numPages]
+        readers = [i for i in readers if page < len(i.pages)]
         if not readers:
             break
         for reader in readers:
@@ -97,6 +98,47 @@ def interleave(dest: Path, wd: Path = Path.cwd()):
         page += 1
     writer.write(dest)
 
+def _duplexify(front: Path, back: Path, out: Path):
+    front, back = PdfReader(front), PdfReader(back)
+    writer = PdfWriter()
+    page = 0
+    while True:
+        if page == len(front.pages):
+            break
+        writer.add_page(front.pages[page])
+        if page < len(back.pages):
+            writer.add_page(back.pages[::-1][page])
+        page += 1
+    writer.write(out)
 
+@cli.command()
+def duplexify(wd: Path = Path.cwd()):
+    """Takes simplex front and reverse simplex back and joins to duplex.
+
+    Files should be named:
+        abc-front.pdf
+        abc-back.pdf
+    Result:
+        abc.pdf
+    """
+    
+
+    pdfs = list(wd.glob('*.pdf'))
+    front_re = r'(.*?)\s*front.pdf'
+    for pdf in pdfs:
+        if not (m := re.match(front_re, pdf.name, re.IGNORECASE)):
+            continue
+        name = m.group(1)
+        back_re = rf'{name}\s*back.pdf'
+        back = [p for p in pdfs if re.match(back_re, p.name, re.IGNORECASE)][0]
+        if not back:
+            print(f'No back for front {pdf}')
+            continue
+        out = pdf.with_stem(name)
+        print(f'Duplexify "{out.name}"')
+        _duplexify(pdf, back, out)
+        pdf.unlink()
+        back.unlink()
+        
 if __name__ == "__main__":
     cli()

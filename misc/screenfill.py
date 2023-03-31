@@ -1,6 +1,4 @@
-"""Screen filling animations in the terminal using blessed. Execute directly for a demonstration.
-
-Aidan Courtney, 2021."""
+"""Screen filling animations in the terminal."""
 
 import math
 import random

@@ -1,3 +1,5 @@
+"""Utility for rerieving, storing, and displaying Stellar balances."""
+
 import asyncio
 import contextlib
 import json

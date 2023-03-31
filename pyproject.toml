@@ -7,6 +7,15 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.10"
+typer = "*"
+rich = "*"
+pypdf = "*"
+fastapi = "*"
+textual = "*"
+aiohttp = "*"
+blessed = "*"
+python-jose = "*"
+passlib = "*"
 
 [tool.poetry.dev-dependencies]
 

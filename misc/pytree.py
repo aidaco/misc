@@ -1,3 +1,5 @@
+"""Tree view of the namespace in a python package."""
+
 import ast
 from functools import partial
 from pathlib import Path

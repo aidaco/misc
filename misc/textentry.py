@@ -1,3 +1,4 @@
+"""TextEntry widget using textual."""
 from rich import print
 from rich.align import Align
 from rich.panel import Panel

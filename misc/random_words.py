@@ -1,42 +1,26 @@
-"""Quick utility for retrieving random words.
-
-Aidan Courtney, 2021"""
+"""Utility for retrieving random words."""
 
 import random
 from argparse import ArgumentParser, ArgumentTypeError
-from itertools import groupby
 from pathlib import Path
-from typing import Iterator
 
 DEFAULT_WORDLIST = Path(__file__).parent / "words.txt"
 DEFAULT_COUNT = 5
 
 
-def iterchars(path: Path, encoding="utf-8") -> Iterator[str]:
-    """Unicode-safe iterator over characters contained in the given file."""
-
-    file = path.open()
-    while char := file.read(1):
-        while True:
-            try:
-                yield char.decode(encoding)
-            except UnicodeDecodeError:
-                char += file.read(1)
+def iterwords(path: Path, sep: str = " ,\n.:;()[]{}|<>-?!"):
+    sep = set(sep)
+    with path.open() as file:
+        word = ""
+        while (ch := file.read(1)) != "":
+            if ch not in sep:
+                word += sep
             else:
-                break
-
-
-def iterwords(path: Path, sep: str = " ,\n.:;()[]{}|<>-?!", **kwargs) -> Iterator[str]:
-    """Iterator over words contained in the given file. kwargs are forwarded to iterchars."""
-
-    return (
-        word
-        for word in (
-            "".join(g[1])
-            for g in groupby(iterchars(path, **kwargs), key=lambda ch: ch in sep)
-        )
-        if all(ch not in sep for ch in word)
-    )
+                if word:
+                    yield word
+                    word = ""
+        if word:
+            yield word
 
 
 def random_words(
@@ -61,7 +45,7 @@ def main():
     parser.add_argument("n", type=int, nargs="?", default=DEFAULT_COUNT)
     parser.add_argument("-w", "--wordlist", type=file_path, default=DEFAULT_WORDLIST)
     args = parser.parse_args()
-    words = random_words(args.wordlist, args.n)
+    words = random_words(args.n, args.wordlist)
     print(words)
 
 
