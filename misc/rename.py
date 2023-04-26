@@ -19,7 +19,8 @@ def _check_no_overwrite(path, force):
 
 
 def _check_parents(path):
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exists_ok=True)
+
 
 
 def _edititer(it):
@@ -40,6 +41,7 @@ def rename(files: list[str], force: bool = False):
         if _check_exist(old) and _check_no_overwrite(new, force)
     )
     for old, new in paths:
+        _check_parents(new)
         old.rename(new)
         print(f"[{old}] -> [{new}]")
 
