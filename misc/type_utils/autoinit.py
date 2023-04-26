@@ -17,7 +17,6 @@ def base_annotations(bs):
 
 class autoinit(type):
     def __new__(cls, name, bases, namespace):
-
         sig = Signature(
             [
                 parameter(*a)

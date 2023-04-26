@@ -1,7 +1,7 @@
-import os
-import time
-import sys
 import asyncio
+import os
+import sys
+import time
 
 
 def scandir_iterative(path):

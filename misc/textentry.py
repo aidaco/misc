@@ -1,13 +1,9 @@
 """TextEntry widget using textual."""
 from rich import print
-from rich.align import Align
 from rich.panel import Panel
-from rich.rule import Rule
-from rich.text import Text
 from textual.app import App
 from textual.reactive import Reactive
 from textual.widget import Widget
-from textual.widgets import Placeholder
 
 
 class TextEntry(Widget):

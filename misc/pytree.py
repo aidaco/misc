@@ -1,14 +1,11 @@
 """Tree view of the namespace in a python package."""
 
 import ast
-from functools import partial
 from pathlib import Path
-from types import MethodType
 
 import typer
 from rich.console import Console, Group
 from rich.panel import Panel
-from rich.table import Table
 
 app = typer.Typer()
 

@@ -1,6 +1,5 @@
-import re
-from pathlib import Path
 import os
+import re
 
 
 def iterfiles(root):
@@ -33,7 +32,7 @@ def iterindex(path):
 
 def iterindex_preload(path):
     with open(path) as file:
-        content = file.read()
+        file.read()
 
         yield from (line.strip() for line in file)
 

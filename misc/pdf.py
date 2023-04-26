@@ -106,15 +106,20 @@ def _get_matching_paths(matcher, wd, pattern):
 
 
 def _duplexify(front: Path, back: Path, out: Path):
-    front, back = PdfReader(front), PdfReader(back)
+    rfront, rback = PdfReader(front), PdfReader(back)
+    if (lfront := len(rfront.pages)) != (lback := len(rback.pages)):
+        print("Front & back must be same length:")
+        print(f"{lfront: >4}pg: {front}")
+        print(f"{lback: >4}pg: {back}")
+        return
     writer = PdfWriter()
     page = 0
     while True:
-        if page == len(front.pages):
+        if page == len(rfront.pages):
             break
-        writer.add_page(front.pages[page])
-        if page < len(back.pages):
-            writer.add_page(back.pages[::-1][page])
+        writer.add_page(rfront.pages[page])
+        if page < len(rback.pages):
+            writer.add_page(rback.pages[::-1][page])
         page += 1
     writer.write(out)
 
@@ -131,10 +136,21 @@ def duplexify(wd: Path = Path.cwd()):
     """
 
     duplex_re = r"(.*?)\s*{}.pdf"
+
     def match_front(s):
-        return m.group(1) if (m := re.match(duplex_re.format("front"), s, re.IGNORECASE)) else None
+        return (
+            m.group(1)
+            if (m := re.match(duplex_re.format("front"), s, re.IGNORECASE))
+            else None
+        )
+
     def match_back(s):
-        return m.group(1) if (m := re.match(duplex_re.format("back"), s, re.IGNORECASE)) else None
+        return (
+            m.group(1)
+            if (m := re.match(duplex_re.format("back"), s, re.IGNORECASE))
+            else None
+        )
+
     fronts = {
         name: path for name, path in _get_matching_paths(match_front, wd, "*.pdf")
     }

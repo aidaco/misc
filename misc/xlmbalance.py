@@ -4,17 +4,13 @@ import asyncio
 import contextlib
 import json
 import sqlite3
-import sys
 import time
 from datetime import datetime
-from functools import cache
 from pathlib import Path
 
 import aiohttp
 import typer
 from rich import print
-from rich.console import Group
-from rich.panel import Panel
 from rich.table import Table
 
 

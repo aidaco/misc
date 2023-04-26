@@ -1,5 +1,6 @@
+from dataclasses import dataclass
+
 import lite
-from dataclasses import dataclass, field
 
 
 @dataclass
