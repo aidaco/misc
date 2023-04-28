@@ -19,8 +19,7 @@ def _check_no_overwrite(path, force):
 
 
 def _check_parents(path):
-    path.parent.mkdir(parents=True, exists_ok=True)
-
+    path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _edititer(it):
