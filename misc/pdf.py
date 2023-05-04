@@ -169,7 +169,6 @@ def duplexify(wd: Path = Path.cwd()):
     pdfs = ((fronts[name], backs[name], name) for name in sduplexes)
     for front, back, name in pdfs:
         out = front.with_stem(name)
-        print(f'Writing "{out.name}"...', end="")
         _duplexify(front, back, out)
         print("\r" f'Wrote "{out.name}".')
         front.unlink()
