@@ -11,8 +11,6 @@ from rich.panel import Panel
 
 # Disable PyPDF warnings
 warnings.filterwarnings("ignore")
-
-
 cli = typer.Typer()
 
 
@@ -105,13 +103,17 @@ def _get_matching_paths(matcher, wd, pattern):
             yield (result, path)
 
 
+class LengthMismatch(Exception):
+    pass
+
+
 def _duplexify(front: Path, back: Path, out: Path):
     rfront, rback = PdfReader(front), PdfReader(back)
     if (lfront := len(rfront.pages)) != (lback := len(rback.pages)):
         print("Front & back must be same length:")
         print(f"{lfront: >4}pg: {front}")
         print(f"{lback: >4}pg: {back}")
-        return
+        raise LengthMismatch()
     writer = PdfWriter()
     page = 0
     while True:
@@ -154,7 +156,8 @@ def duplexify(wd: Path = Path.cwd()):
     fronts = {
         name: path for name, path in _get_matching_paths(match_front, wd, "*.pdf")
     }
-    backs = {name: path for name, path in _get_matching_paths(match_back, wd, "*.pdf")}
+    backs = {name: path for name,
+             path in _get_matching_paths(match_back, wd, "*.pdf")}
     sfronts, sbacks = set(fronts), set(backs)
     sduplexes = sfronts & sbacks
 
@@ -169,10 +172,13 @@ def duplexify(wd: Path = Path.cwd()):
     pdfs = ((fronts[name], backs[name], name) for name in sduplexes)
     for front, back, name in pdfs:
         out = front.with_stem(name)
-        _duplexify(front, back, out)
-        print("\r" f'Wrote "{out.name}".')
-        front.unlink()
-        back.unlink()
+        try:
+            _duplexify(front, back, out)
+            print("\r" f'Wrote "{out.name}".')
+            front.unlink()
+            back.unlink()
+        except LengthMismatch:
+            pass
 
 
 if __name__ == "__main__":
