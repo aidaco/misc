@@ -156,8 +156,7 @@ def duplexify(wd: Path = Path.cwd()):
     fronts = {
         name: path for name, path in _get_matching_paths(match_front, wd, "*.pdf")
     }
-    backs = {name: path for name,
-             path in _get_matching_paths(match_back, wd, "*.pdf")}
+    backs = {name: path for name, path in _get_matching_paths(match_back, wd, "*.pdf")}
     sfronts, sbacks = set(fronts), set(backs)
     sduplexes = sfronts & sbacks
 
