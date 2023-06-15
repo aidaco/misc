@@ -56,7 +56,7 @@ def nsplit(src: Path, wd: Path = Path.cwd()):
         writer.add_page(page)
         dest = src.with_stem(f"{i}-{src.stem}")
         writer.write(dest)
-        print(f"./{dest.relative_to(wd)}")
+        print(dest.resolve())
 
 
 @cli.command()
@@ -76,6 +76,7 @@ def nmerge(dest: Path, wd: Path = Path.cwd()):
         for page in PdfReader(src).pages:
             writer.add_page(page)
     writer.write(dest)
+    print(dest.resolve())
 
 
 @cli.command()
