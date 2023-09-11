@@ -1,7 +1,36 @@
-from typing import Any
+import typing
 from datetime import datetime
 from textwrap import dedent
 from dataclasses import dataclass
+
+def get_column_info(field):
+    name = field.name
+    decltype = field.type if isinstance(field.type, str) else field.type.__name__
+    constraints = field.type.__metadata__ if typing.get_origin(field.type) == typing.Annotated else ()
+    return name, decltype, constraints
+
+
+def make_column_decl(field):
+    name, decltype, constraints = get_column_info(field)
+    return f'{name} {decltype}' if not constraints else f'{name} {decltype} {" ".join(constraints)}'
+
+
+def generate_create_query(datacls: type) -> str:
+    name = datacls.__name__
+    columns = ', '.join(map(make_column_decl, fields(datacls)))
+    return f"CREATE TABLE IF NOT EXISTS {name} ({columns});"
+
+
+def generate_insert_query(datacls: type) -> str:
+    name = datacls.__name__
+    columns = ', '.join((field for field in fields(datacls)))
+    placeholders = ', '.join([':' + x.name for x in fields(datacls)])
+    return f"INSERT INTO {name} ({columns}) VALUES ({placeholders});"
+
+def generate_get_query(datacls: type) -> str:
+    name = datacls.__name__
+    columns = ', '.join((field for field in fields(datacls)))
+    return f"SELECT * FROM {name};"
 
 
 @dataclass
