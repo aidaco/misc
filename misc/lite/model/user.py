@@ -1,36 +1,54 @@
 import typing
 from datetime import datetime
 from textwrap import dedent
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+
 
 def get_column_info(field):
     name = field.name
     decltype = field.type if isinstance(field.type, str) else field.type.__name__
-    constraints = field.type.__metadata__ if typing.get_origin(field.type) == typing.Annotated else ()
+    constraints = (
+        field.type.__metadata__
+        if typing.get_origin(field.type) == typing.Annotated
+        else ()
+    )
     return name, decltype, constraints
 
 
 def make_column_decl(field):
     name, decltype, constraints = get_column_info(field)
-    return f'{name} {decltype}' if not constraints else f'{name} {decltype} {" ".join(constraints)}'
+    return (
+        f"{name} {decltype}"
+        if not constraints
+        else f'{name} {decltype} {" ".join(constraints)}'
+    )
 
 
 def generate_create_query(datacls: type) -> str:
     name = datacls.__name__
-    columns = ', '.join(map(make_column_decl, fields(datacls)))
+    columns = ", ".join(map(make_column_decl, fields(datacls)))
     return f"CREATE TABLE IF NOT EXISTS {name} ({columns});"
 
 
-def generate_insert_query(datacls: type) -> str:
+def generate_insert_query_template(
+    datacls: type, subset: typing.Sequence[str] | None = None
+) -> str:
     name = datacls.__name__
-    columns = ', '.join((field for field in fields(datacls)))
-    placeholders = ', '.join([':' + x.name for x in fields(datacls)])
+    _subset = subset or [field.name for field in fields(datacls)]
+    columns = ", ".join(_subset)
+    placeholders = ", ".join(f":{field}" for field in _subset)
     return f"INSERT INTO {name} ({columns}) VALUES ({placeholders});"
 
-def generate_get_query(datacls: type) -> str:
+
+def generate_list_query(datacls: type):
     name = datacls.__name__
-    columns = ', '.join((field for field in fields(datacls)))
     return f"SELECT * FROM {name};"
+
+
+def generate_where_query(datacls: type, **filters) -> str:
+    name = datacls.__name__
+    filters = " AND ".join(f"{column}={value}" for column, value in filters)
+    return f"SELECT * FROM {name} WHERE {filters};"
 
 
 @dataclass
