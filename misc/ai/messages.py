@@ -1,72 +1,14 @@
 import re
 import base64
-from typing import Self, Literal
+from typing import Self, Literal, ClassVar
 from dataclasses import dataclass
 import textwrap
+from pathlib import Path
 
+from rich.console import Group
+from rich.panel import Panel
 import pytest
-
-
-@dataclass
-class Content:
-    text: str
-    image_urls: list[str] | None
-    
-
-
-@dataclass
-class Message:
-    role: Literal['system', 'user', 'assistant']
-    content: Content
-
-    @classmethod
-    def parse(cls, message) -> Self:
-        content = _get_item_or_attr(message, "content", None)
-        role = _get_item_or_attr(message, "role", None)
-        if not role or not content:
-            return
-
-        match content:
-            case str():
-                text = content
-                image_urls = None
-            case [*parts]:
-                texts = []
-                image_urls = []
-                for p in parts:
-                    match p:
-                        case {'type': 'text', 'text': text}:
-                            texts.append(text)
-                        case {'type': 'image_url', 'image_url': {'url': url}}:
-                            image_urls.append(url)
-                text = '\n'.join(texts)
-                images = ' '.join(f'[link={url}]Image {i}[/link]' for i, url in enumerate(images))
-                out = f'{text}\n{images}'
-
-
-def _extract_matches(pattern, text):
-    matches = []
-
-    def append(match):
-        matches.append(match.group(0))
-        return ""
-
-    return matches, pattern.sub(append, text)
-
-
-def _base64url(file):
-    data = base64.b64encode(file.read()).decode("utf-8")
-    return f"data:image/jpeg;base64,{data}"
-
-
-def _get_item_or_attr(obj, name, default=None):
-    try:
-        return obj[name]
-    except (KeyError, TypeError):
-        try:
-            return getattr(obj, name)
-        except AttributeError:
-            return default
+from twidge.widgets import Close, EditString, Framed
 
 
 URL_REGEX = re.compile(
@@ -98,6 +40,148 @@ PATH_REGEX = re.compile(
 """,
     re.VERBOSE,
 )
+
+
+@dataclass
+class Content:
+    text: str | None
+    image_urls: list[str] | None
+
+    @classmethod
+    def parse(cls, content):
+        match content:
+            case str():
+                return cls(content, None)
+            case [*parts]:
+                texts = []
+                image_urls = []
+                for p in parts:
+                    match p:
+                        case {'type': 'text', 'text': text}:
+                            texts.append(text)
+                        case {'type': 'image_url', 'image_url': {'url': url}}:
+                            image_urls.append(url)
+                text = '\n'.join(texts)
+                return cls(text, image_urls)
+
+    def asdict(self):
+        if self.image_urls is None:
+            return self.text
+        return [
+            {'type': 'text', 'text': self.text},
+            *(
+                {
+                    'type': 'image_url',
+                    'image_url': {'url': url}
+                }
+                for url in self.image_urls
+            )
+        ]
+
+    def __rich__(self):
+        if not self.image_urls:
+            return self.text
+        links = ' '.join(
+            f'[link={url}]Image {i}[/link]'
+            for i, url in enumerate(self.image_urls)
+        )
+        return Group(
+            self.text,
+            ' '.join(
+                f'[link={url}]Image {i}[/link]'
+                for i, url in
+                enumerate(self.image_urls)
+            )
+        )
+    
+
+@dataclass
+class Message:
+    role: Literal['system', 'user', 'assistant']
+    content: Content
+    styles: ClassVar = {
+        "system": "bright_blue italic on black",
+        "user": "bright_red on black",
+        "assistant": "bright_green on black",
+        "border": "bright_black bold not italic on black",
+        "editor_border": "bright_yellow on black",
+    }
+
+    @classmethod
+    def compose(cls, role, message='') -> Self:
+        text = Close(
+            Framed(
+                EditString(
+                    message, text_style=cls.styles[role], cursor_line_style=cls.styles[role]
+                ),
+                title=role,
+                title_align="left",
+                style=cls.styles['editor_border'],
+            )
+        ).run()
+        text, urls = _extract_image_urls(text)
+        return cls(role, Content(text, urls))
+
+    @classmethod
+    def parse(cls, message) -> Self:
+        role = _get_item_or_attr(message, "role", None)
+        content = _get_item_or_attr(message, "content", None)
+        return cls(role, Content.parse(content))
+
+    def asdict(self):
+        return {
+            'role': self.role,
+            'content': self.content.asdict(),
+        }
+
+    def __rich__(self):
+        return Panel.fit(
+            self.content,
+            title=self.role,
+            title_align="left",
+            style=self.styles[self.role],
+            border_style=self.styles['border'],
+        )
+
+
+def _extract_image_urls(text, url_pattern=URL_REGEX, path_pattern=PATH_REGEX):
+    urls, no_urls = _extract_matches(url_pattern, text)
+    paths, cleaned = _extract_matches(path_pattern, no_urls)
+    if not urls and not paths:
+        return text.strip(), None
+    urls.extend(
+        _base64url(p.open("rb"))
+        for p in map(Path, paths)
+        if p.exists()
+    )
+    return cleaned.strip(), urls
+
+
+def _extract_matches(pattern, text):
+    matches = []
+
+    def append(match):
+        matches.append(match.group(0))
+        return ""
+
+    return matches, pattern.sub(append, text)
+
+
+def _base64url(file):
+    data = base64.b64encode(file.read()).decode("utf-8")
+    return f"data:image/jpeg;base64,{data}"
+
+
+def _get_item_or_attr(obj, name, default=None):
+    try:
+        return obj[name]
+    except (KeyError, TypeError):
+        try:
+            return getattr(obj, name)
+        except AttributeError:
+            return default
+
+
 
 
 @pytest.mark.parametrize(
@@ -178,7 +262,7 @@ def test_url_regex(url):
     /Library/LaunchAgents/com.apple.kextd.plist
     ~/Library/Caches/com.apple.Safari/Cache.db
     C:\Windows\Temp\WERTemp.dat
-"""
+    """
     )
     .strip()
     .splitlines(),

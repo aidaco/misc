@@ -3,25 +3,17 @@ import json
 from rich import print
 from rich.panel import Panel
 import openai
-from twidge.widgets import Close, EditString, Framed
 
-
-key = open("/home/aidan/.secrets/openai-api-key").read().strip()
-client = openai.OpenAI(api_key=key)
+from .completers import OpenAICompleter
+from .messages import Message
 
 
 class Chat:
-    styles = {
-        "system": "bright_blue italic on black",
-        "user": "bright_red on black",
-        "assistant": "bright_green on black",
-        "border": "bright_black bold not italic on black",
-        "editor_border": "bright_yellow on black",
-    }
     default_initial_system = "You are a helpful assistant."
 
-    def __init__(self):
+    def __init__(self, completer=None):
         self.messages = []
+        self.completer = completer if completer is not None else OpenAICompleter()
 
     def run(self):
         try:
@@ -32,97 +24,26 @@ class Chat:
         except KeyboardInterrupt:
             print("Exit.")
 
-    def show_message(self, message):
-        content = _get_item_or_attr(message, "content", None)
-        role = _get_item_or_attr(message, "role", None)
-        if not role or not content:
-            return
-
-        match content:
-            case str():
-                out = content
-            case [*parts]:
-                texts = []
-                images = []
-                for p in parts:
-                    match p:
-                        case {'type': 'text', 'text': text}:
-                            texts.append(text)
-                        case {'type': 'image_url', 'image_url': {'url': url}}:
-                            images.append(url)
-                text = '\n'.join(texts)
-                images = ' '.join(f'[link={url}]Image {i}[/]' for i, url in enumerate(images))
-                out = f'{text}\n{images}'
-        print(
-            Panel.fit(
-                out,
-                title=role,
-                title_align="left",
-                style=self.styles[role],
-                border_style=self.styles['border'],
-            )
-        )
-
-    def post(self, message=None, **properties):
-        msg = (
-            message
-            or properties
-            or throw(ValueError("Must pass message or properties."))
-        )
-        self.messages.append(msg)
-        self.show_message(msg)
-
-    def editprompt(self, role, message):
-        widget = Close(
-            Framed(
-                EditString(
-                    message, text_style=self.styles[role], cursor_line_style=self.styles[role]
-                ),
-                title=role,
-                title_align="left",
-                style=self.styles['editor_border'],
-            )
-        )
-        text = widget.run()
-        urls, no_urls = extract_matches(URL_REGEX, text)
-        paths, cleaned = extract_matches(PATH_REGEX, no_urls)
-        if urls or paths:
-            return {
-                "role": role,
-                "content": [
-                    {"type": "text", "text": cleaned},
-                    *({"type": "image_url", "image_url": {"url": url}} for url in urls),
-                    *(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": base64url(path.open("rb"))},
-                        }
-                        for path in paths
-                    ),
-                ],
-            }
-        return {"role": role, "content": text}
+    def post(self, message: Message):
+        self.messages.append(message)
+        if message.content.text or message.content.image_urls:
+            print(message)
 
     def system(self, message=""):
-        self.post(self.editprompt("system", message))
+        self.post(Message.compose("system", message))
 
     def user(self, message=""):
-        self.post(self.editprompt("user", message))
+        self.post(Message.compose("user", message))
 
     def assistant(self, message=""):
-        self.post(self.editprompt("assistant", message))
+        self.post(Message.compose("assistant", message))
 
     def complete(self):
-        completion = (
-            client.chat.completions.create(
-                model="gpt-4-vision-preview",
-                messages=self.messages,
-                max_tokens=4096,
+        self.post(
+            self.completer.complete(
+                self.messages
             )
-            .choices[0]
-            .message
         )
-        self.post(completion)
 
 
 def execute_python(source):
@@ -198,8 +119,3 @@ class ChatTools(Chat):
 
 def throw(exc):
     raise exc
-
-
-if __name__ == "__main__":
-    Chat().run()
-
