@@ -4,9 +4,10 @@ from typing import Literal
 from time import time_ns
 from datetime import datetime
 import json
-
-from openai import OpenAI
 import urllib.request
+
+from typer import Typer
+from openai import OpenAI
 
 
 key = open('/home/aidan/.secrets/openai-api-key').read().strip()
@@ -18,16 +19,14 @@ OUTDIR = Path('results')
 def generate_image(
     prompt: str,
     output_dir: Path,
+    output_tag: str | None = None,
     model: Literal['dall-e-3',  'dall-e-2'] = 'dall-e-3',
     size: Literal['1024x1024', '1792x1024', '1024x1792'] = '1792x1024',
     quality: Literal['standard', 'hd'] = 'hd',
     style: Literal['vivid', 'natural'] = 'vivid',
-    suffix: str = 'strictly contained within the image boundaries',
 ):
 
-    tag = f'{time_ns():x}'
-    if suffix:
-        prompt = f'{prompt} {suffix}'
+    tag = output_tag if output_tag is not None else f'{time_ns():x}'
     parameters = dict(
         model=model,
         prompt=prompt,
@@ -103,10 +102,21 @@ def generate_image_variations(prompt: str):
         print('"', p, '"')
 
 
-if __name__ == '__main__':
-    match sys.argv[1:]:
-        case [arg]:
-            prompt = arg.strip()
-        case [*args]:
-            prompt = ' '.join(args).strip()
+cli = Typer()
+
+
+@cli.command()
+def single(prompt: str):
+    generate_image(
+        prompt=prompt,
+        output_dir=Path.cwd(),
+    )
+
+
+@cli.command()
+def variations(prompt: str):
     generate_image_variations(prompt)
+
+
+if __name__ == '__main__':
+    cli()

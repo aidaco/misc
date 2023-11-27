@@ -48,16 +48,22 @@ class Content:
     image_urls: list[str] | None
 
     @classmethod
-    def parse(cls, content):
+    def parse(cls, content, extract_urls: bool = True):
         match content:
             case str():
-                return cls(content, None)
+                if extract_urls:
+                    text, urls = _extract_image_urls(content)
+                    return cls(text, urls)
+                return cls(content, [])
             case [*parts]:
                 texts = []
                 image_urls = []
                 for p in parts:
                     match p:
                         case {'type': 'text', 'text': text}:
+                            if extract_urls:
+                                text, urls = _extract_image_urls(text)
+                                image_urls.extend(urls)
                             texts.append(text)
                         case {'type': 'image_url', 'image_url': {'url': url}}:
                             image_urls.append(url)
@@ -99,6 +105,8 @@ class Content:
 class Message:
     role: Literal['system', 'user', 'assistant']
     content: Content
+    tool_call_id: str | None = None,
+    name: str | None = None,
     styles: ClassVar = {
         "system": "bright_blue italic on black",
         "user": "bright_red on black",
@@ -123,10 +131,18 @@ class Message:
         return cls(role, Content(text, urls))
 
     @classmethod
+    def construct(cls, **properties) -> Self:
+        return cls.parse(properties)
+
+    @classmethod
     def parse(cls, message) -> Self:
         role = _get_item_or_attr(message, "role", None)
         content = _get_item_or_attr(message, "content", None)
-        return cls(role, Content.parse(content))
+        tool_call_id = _get_item_or_attr(message, "tool_call_id", None)
+        name = _get_item_or_attr(message, "name", None)
+        if role != 'tool' and tool_call_id is not None or name is not None:
+            raise ValueError('name and tool_call_id are specific to the tool role')
+        return cls(role, Content.parse(content), tool_call_id, name)
 
     def asdict(self):
         return {

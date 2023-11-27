@@ -1,19 +1,21 @@
 import json
 
 from rich import print
-from rich.panel import Panel
-import openai
 
-from .completers import OpenAICompleter
+from .clients import OpenAIClient, Client
 from .messages import Message
 
 
 class Chat:
     default_initial_system = "You are a helpful assistant."
+    default_client_class = OpenAIClient
 
-    def __init__(self, completer=None):
+    def __init__(
+        self,
+        client: Client | None = None
+    ):
         self.messages = []
-        self.completer = completer if completer is not None else OpenAICompleter()
+        self.client = client if client is not None else self.default_client_class()
 
     def run(self):
         try:
@@ -40,82 +42,40 @@ class Chat:
 
     def complete(self):
         self.post(
-            self.completer.complete(
+            self.client.complete(
                 self.messages
             )
         )
 
 
-def execute_python(source):
-    print(source)
-    if input("Execute?") == "y":
-        env = dict()
-        exec(source, env, env)
-
-
 class ChatTools(Chat):
-    default_tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "execute_python",
-                "description": "Execute Python source code. Prompts the user for confirmation before execution.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "source": {
-                            "type": "string",
-                            "description": "The Python source code to be executed.",
-                        },
-                    },
-                    "required": ["source"],
-                },
-            },
-        }
-    ]
-    default_functions = {
-        "execute_python": execute_python,
-    }
+    default_tool_schema = []
+    default_tool_map = {}
 
-    def __init__(self, tools=None, functions=None):
-        self.messages = []
-        self.tools = self.default_tools if tools is None else tools
-        self.functions = self.default_functions if functions is None else functions
+    def __init__(self, client: Client | None = None, tool_schema=None, tool_map=None):
+        super().__init__(client)
+        self.tool_schema = self.default_tool_schema if tool_schema is None else tool_schema
+        self.tool_map = self.default_tool_map if tool_map is None else tool_map
 
     def complete(self):
-        completion = (
-            client.chat.completions.create(
-                model="gpt-4-1106-preview",
-                messages=self.messages,
-                tools=self.default_tools,
-                tool_choice="auto",
-            )
-            .choices[0]
-            .message
+        completion, called_tools = self.client.complete_with_tool_calls(
+            self.messages,
+            self.tool_schema,
+            self.tool_map,
         )
         self.post(completion)
-        tool_calls = getattr(completion, "tool_calls", None)
-        if not tool_calls:
+        if not called_tools:
             return
-        for fncall in tool_calls:
-            fn = self.default_functions[fncall.function.name]
-            args = json.loads(fncall.function.arguments)
-            self.post(
-                tool_call_id=fncall.id,
-                role="tool",
-                name=fncall.function.name,
-                content=fn(**args),
-            )
-        follow_up = (
-            client.chat.completions.create(
-                model="gpt-4-1106-preview",
-                messages=self.messages,
-            )
-            .choices[0]
-            .message
-        )
-        self.post(follow_up)
+
+        for call in called_tools:
+            content = call['content']
+            self.post(**call)
+        super().complete()
 
 
 def throw(exc):
     raise exc
+
+
+if __name__ == '__main__':
+    Chat().run()
