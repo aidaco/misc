@@ -1,21 +1,16 @@
 import json
 
 from rich import print
+from typer import Typer
 
-from .clients import OpenAIClient, Client
-from .messages import Message
+from .clients import OpenAIClient, Client, Completer
+from .messages import Messages, compose
 
 
+@dataclass
 class Chat:
-    default_initial_system = "You are a helpful assistant."
-    default_client_class = OpenAIClient
-
-    def __init__(
-        self,
-        client: Client | None = None
-    ):
-        self.messages = []
-        self.client = client if client is not None else self.default_client_class()
+    messages: Messages
+    completer: Completer
 
     def run(self):
         try:
@@ -26,56 +21,84 @@ class Chat:
         except KeyboardInterrupt:
             print("Exit.")
 
-    def post(self, message: Message):
-        self.messages.append(message)
-        if message.content.text or message.content.image_urls:
-            print(message)
 
     def system(self, message=""):
-        self.post(Message.compose("system", message))
+        self.messages.post(
+            compose("system", message)
+        )
 
     def user(self, message=""):
-        self.post(Message.compose("user", message))
+        self.post(
+            compose("user", message)
+        )
 
     def assistant(self, message=""):
-        self.post(Message.compose("assistant", message))
+        self.post(
+            compose("assistant", message)
+        )
 
     def complete(self):
-        self.post(
-            self.client.complete(
-                self.messages
-            )
-        )
+        for message in self.completer.complete(self.messages):
+            self.post(message)
 
 
 class ChatTools(Chat):
-    default_tool_schema = []
-    default_tool_map = {}
 
-    def __init__(self, client: Client | None = None, tool_schema=None, tool_map=None):
+    def __init__(self, tool_schema, tool_map, client: Client | None = None):
         super().__init__(client)
-        self.tool_schema = self.default_tool_schema if tool_schema is None else tool_schema
-        self.tool_map = self.default_tool_map if tool_map is None else tool_map
+        self.tool_schema = tool_schema
+        self.tool_map = tool_map
 
     def complete(self):
-        completion, called_tools = self.client.complete_with_tool_calls(
+        for message in self.client.complete_with_tool_calls(
             self.messages,
             self.tool_schema,
             self.tool_map,
-        )
-        self.post(completion)
-        if not called_tools:
-            return
-
-        for call in called_tools:
-            content = call['content']
-            self.post(**call)
-        super().complete()
+        ):
+            self.post(message)
 
 
 def throw(exc):
     raise exc
 
+cli = Typer()
+
+@cli.command()
+def chat():
+    Chat().run()
+
+
+@cli.command()
+def imgen():
+    client = OpenAIClient(chat_model='gpt-4-1106-preview')
+    ChatTools(
+        tool_schema = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_image",
+                    "description": "Create an image from a prompt using a generative AI model.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "The prompt that the image generation model will create an image from.",
+                            },
+                            "size": {"type": "string", "enum": ['1024x1024', '1792x1024', '1024x1792']},
+                            "quality": {"type": "string", "enum": ['standard', 'hd']},
+                            "style": {"type": "string", "enum": ['vivid', 'natural']},
+                        },
+                        "required": ["prompt"],
+                    },
+                },
+            }
+        ],
+        tool_map={
+            'generate_image': client.generate_image,
+        }
+    ).run()
+
 
 if __name__ == '__main__':
-    Chat().run()
+    cli()

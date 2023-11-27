@@ -1,15 +1,239 @@
 import re
 import base64
-from typing import Self, Literal, ClassVar
+from typing import Self, Literal, ClassVar, runtime_checkable, Protocol, Callable
 from dataclasses import dataclass
 import textwrap
 from pathlib import Path
 
+from pydantic import TypeAdapter
 from rich.console import Group
 from rich.panel import Panel
 import pytest
 from twidge.widgets import Close, EditString, Framed
 
+
+
+STYLES = {
+    "system": "bright_blue italic on black",
+    "user": "bright_red on black",
+    "assistant": "bright_green on black",
+    "border": "bright_black bold not italic on black",
+    "editor_border": "bright_yellow on black",
+}
+
+@runtime_checkable
+class Objectable(Protocol):
+    def object(self) -> dict:
+        ...
+
+
+def objectify(inst):
+    match inst:
+        case Objectable():
+            return inst.object()
+        case _:
+            return inst
+
+
+@dataclass
+class TextContentPart:
+    text: str
+
+    def object(self):
+        return {'type': 'text', 'text': self.text}
+
+    def __rich__(self):
+        return self.text
+
+
+@dataclass
+class ImageContentPart:
+    url: str
+
+    def object(self):
+        return {
+            'type': 'image_url',
+            'image_url': {
+                'url': self.url
+            }
+        }
+
+    def __rich__(self):
+        return f'[link={self.url}]{self.url}[/link]'
+
+
+type TextContent = str
+type MultiModalContent = list[TextContentPart | ImageContentPart]
+
+
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str
+
+    def object(self):
+        return {
+            'id': self.id,
+            'type': 'function',
+            'function': {
+                'name': self.name,
+                'arguments': self.arguments
+            }
+        }
+
+
+@dataclass
+class ChatMessage[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
+    role: RoleType
+    content: ContentType
+
+    def object(self):
+        return {
+            'role': self.role,
+            'content': objectify(self.content)
+        }
+
+    def __rich__(self):
+        return Panel.fit(
+            self.content,
+            title=self.role,
+            title_align="left",
+            style=STYLES[self.role],
+            border_style=STYLES['border'],
+        )
+
+@dataclass
+class ChatMessageToolCall[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
+    content: ContentType
+    tool_calls: list[ToolCall] | None
+    role: RoleType
+
+    def object(self):
+        return {
+            'role': self.role,
+            'content': self.content,
+            'tool_calls': [call.json() for call in self.tool_calls]
+        }
+
+    def __rich__(self):
+        return Panel.fit(
+            Group(self.content, self.tool_calls),
+            title=self.role,
+            title_align="left",
+            style=STYLES[self.role],
+            border_style=STYLES['border'],
+        )
+
+@dataclass
+class ChatMessageToolResult[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
+    content: ContentType
+    tool_call_id: str
+    name: str
+    role: RoleType
+
+    def object(self):
+        return {
+            'role': self.role,
+            'tool_call_id': self.tool_call_id,
+            'name': self.name,
+            'content': self.content
+        }
+
+    def __rich__(self):
+        return Panel.fit(
+            Group(self.tool_call_id, self.name, self.content),
+            title=self.role,
+            title_align="left",
+            style=STYLES[self.role],
+            border_style=STYLES['border'],
+        )
+
+
+type TextChatMessage = ChatMessage[Literal['system', 'user', 'assistant'], TextContent]
+type TextWithToolsChatMessage = (
+    ChatMessage[Literal['system', 'user', 'assistant'], TextContent] |
+    ChatMessageToolCall[Literal['assistant'], TextContent] |
+    ChatMessageToolResult[Literal['tool'], TextContent]
+)
+type MultiModalChatMessage = (
+    ChatMessage[Literal['system', 'assistant'], TextContent] |
+    ChatMessage[Literal['system', 'user', 'assistant'], MultiModalContent]
+)
+
+
+@dataclass
+class Messages[MessageType]:
+    messages: list[MessageType]
+    watchers: list[Callable]
+
+    def notify(self, fn: Callable):
+        self.watchers.append(fn)
+
+    
+    def post(self, message: Message):
+        self.messages.append(message)
+        for fn in self.watchers:
+            fn(message)
+        if message.content.text or message.content.image_urls:
+            print(message)
+
+
+def parse(cls, obj):
+    return TypeAdapter(
+        cls,
+        config={'extra': 'forbid'}
+    ).validate_python(obj)
+
+
+def construct(cls, **properties):
+    return parse(cls, properties)
+
+
+def compose(role: str, content: str = '', extract_images: bool = True):
+    text = Close(
+        Framed(
+            EditString(
+                content, text_style=STYLES[role], cursor_line_style=STYLES[role]
+            ),
+            title=role,
+            title_align="left",
+            style=STYLES['editor_border'],
+        )
+    ).run()
+    if not extract_images:
+        return ChatMessage(role, text)
+    content = extract_urls(text) if extract_images else text
+    return ChatMessage(role, content)
+
+
+def extract_urls(content: TextContent | MultiModalContent) -> TextContent | MultiModalContent:
+    match content:
+        case str():
+            text, urls = _extract_image_urls(content)
+            if not urls:
+                return text
+            return [
+                TextContentPart(text),
+                *(ImageContentPart(url) for url in urls)
+            ]
+        case list():
+            parts = []
+            for part in content:
+                match part:
+                    case TextContentPart():
+                        text, urls = _extract_image_urls(part)
+                        if not urls:
+                            parts.append(part)
+                        else:
+                            parts.append(TextContentPart(text))
+                            parts.extend(ImageContentPart(url) for url in urls)
+                    case ImageContentPart():
+                        parts.extend(part)
+            return parts
+                
+
+    
 
 URL_REGEX = re.compile(
     r"""
@@ -40,124 +264,6 @@ PATH_REGEX = re.compile(
 """,
     re.VERBOSE,
 )
-
-
-@dataclass
-class Content:
-    text: str | None
-    image_urls: list[str] | None
-
-    @classmethod
-    def parse(cls, content, extract_urls: bool = True):
-        match content:
-            case str():
-                if extract_urls:
-                    text, urls = _extract_image_urls(content)
-                    return cls(text, urls)
-                return cls(content, [])
-            case [*parts]:
-                texts = []
-                image_urls = []
-                for p in parts:
-                    match p:
-                        case {'type': 'text', 'text': text}:
-                            if extract_urls:
-                                text, urls = _extract_image_urls(text)
-                                image_urls.extend(urls)
-                            texts.append(text)
-                        case {'type': 'image_url', 'image_url': {'url': url}}:
-                            image_urls.append(url)
-                text = '\n'.join(texts)
-                return cls(text, image_urls)
-
-    def asdict(self):
-        if self.image_urls is None:
-            return self.text
-        return [
-            {'type': 'text', 'text': self.text},
-            *(
-                {
-                    'type': 'image_url',
-                    'image_url': {'url': url}
-                }
-                for url in self.image_urls
-            )
-        ]
-
-    def __rich__(self):
-        if not self.image_urls:
-            return self.text
-        links = ' '.join(
-            f'[link={url}]Image {i}[/link]'
-            for i, url in enumerate(self.image_urls)
-        )
-        return Group(
-            self.text,
-            ' '.join(
-                f'[link={url}]Image {i}[/link]'
-                for i, url in
-                enumerate(self.image_urls)
-            )
-        )
-    
-
-@dataclass
-class Message:
-    role: Literal['system', 'user', 'assistant']
-    content: Content
-    tool_call_id: str | None = None,
-    name: str | None = None,
-    styles: ClassVar = {
-        "system": "bright_blue italic on black",
-        "user": "bright_red on black",
-        "assistant": "bright_green on black",
-        "border": "bright_black bold not italic on black",
-        "editor_border": "bright_yellow on black",
-    }
-
-    @classmethod
-    def compose(cls, role, message='') -> Self:
-        text = Close(
-            Framed(
-                EditString(
-                    message, text_style=cls.styles[role], cursor_line_style=cls.styles[role]
-                ),
-                title=role,
-                title_align="left",
-                style=cls.styles['editor_border'],
-            )
-        ).run()
-        text, urls = _extract_image_urls(text)
-        return cls(role, Content(text, urls))
-
-    @classmethod
-    def construct(cls, **properties) -> Self:
-        return cls.parse(properties)
-
-    @classmethod
-    def parse(cls, message) -> Self:
-        role = _get_item_or_attr(message, "role", None)
-        content = _get_item_or_attr(message, "content", None)
-        tool_call_id = _get_item_or_attr(message, "tool_call_id", None)
-        name = _get_item_or_attr(message, "name", None)
-        if role != 'tool' and tool_call_id is not None or name is not None:
-            raise ValueError('name and tool_call_id are specific to the tool role')
-        return cls(role, Content.parse(content), tool_call_id, name)
-
-    def asdict(self):
-        return {
-            'role': self.role,
-            'content': self.content.asdict(),
-        }
-
-    def __rich__(self):
-        return Panel.fit(
-            self.content,
-            title=self.role,
-            title_align="left",
-            style=self.styles[self.role],
-            border_style=self.styles['border'],
-        )
 
 
 def _extract_image_urls(text, url_pattern=URL_REGEX, path_pattern=PATH_REGEX):
