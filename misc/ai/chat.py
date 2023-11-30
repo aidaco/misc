@@ -2,64 +2,45 @@ import json
 
 from rich import print
 from typer import Typer
+from dataclasses import dataclass
 
-from .clients import OpenAIClient, Client, Completer
-from .messages import Messages, compose
+import openai
+
+from .composers import ComposeText, ComposeMultiModal
+from .completers import OpenAITextChatCompleter, OpenAIMultiModalChatCompleter
+from .messages import MessageProvider, Messages, construct, TextWithToolsChatMessage, MultiModalWithToolsChatMessage
 
 
 @dataclass
-class Chat:
-    messages: Messages
-    completer: Completer
+class Chat[MessageType]:
+    messages: Messages[MessageType]
+    composer: MessageProvider[MessageType]
+    completer: MessageProvider[MessageType]
+
+    @staticmethod
+    def text() -> 'Chat[TextChatMessage]':
+        return Chat(Messages([], []), ComposeText(), OpenAITextChatCompleter(openai.OpenAI()))
+
+    @staticmethod
+    def multimodal() -> 'Chat[MultiModalChatMessage]':
+        return Chat(Messages([], []), ComposeMultiModal(), OpenAIMultiModalChatCompleter(openai.OpenAI()))
 
     def run(self):
+        compose = self.composer.provide
+        complete = self.completer.provide
         try:
-            self.system(self.default_initial_system)
+            self.message(compose, 'system')
             while True:
-                self.user()
-                self.complete()
+                self.message(compose, 'user')
+                self.message(complete, 'assistant')
         except KeyboardInterrupt:
             print("Exit.")
 
-
-    def system(self, message=""):
-        self.messages.post(
-            compose("system", message)
-        )
-
-    def user(self, message=""):
-        self.post(
-            compose("user", message)
-        )
-
-    def assistant(self, message=""):
-        self.post(
-            compose("assistant", message)
-        )
-
-    def complete(self):
-        for message in self.completer.complete(self.messages):
-            self.post(message)
+    def message(self, provider, role: str):
+        for message in provider(role, self.messages):
+            self.messages.post(message)
 
 
-class ChatTools(Chat):
-
-    def __init__(self, tool_schema, tool_map, client: Client | None = None):
-        super().__init__(client)
-        self.tool_schema = tool_schema
-        self.tool_map = tool_map
-
-    def complete(self):
-        for message in self.client.complete_with_tool_calls(
-            self.messages,
-            self.tool_schema,
-            self.tool_map,
-        ):
-            self.post(message)
-
-
-def throw(exc):
-    raise exc
 
 cli = Typer()
 
