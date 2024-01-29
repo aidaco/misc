@@ -7,6 +7,7 @@ license = "MIT"
 
 [tool.poetry.dependencies]
 python = "^3.10"
+cyclopts = "*"
 typer = "*"
 rich = "*"
 pypdf = "*"
@@ -16,6 +17,9 @@ aiohttp = "*"
 blessed = "*"
 python-jose = "*"
 passlib = "*"
+
+[tool.poetry.scripts]
+misc = 'misc.cli:cli'
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

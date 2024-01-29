@@ -113,9 +113,9 @@ class DirectoryView:
         self.pathviews = [
             PathView(
                 path,
-                "bright_white on black"
+                "bright_white"
                 if ix not in self.selected
-                else "black on bright_white",
+                else "bright_black on bright_white",
             )
             for ix, path in enumerate(self.paths)
         ]
@@ -372,8 +372,13 @@ class ModeSwitch:
         return self.widget.result
 
 
-def filer(path: Path = Path.cwd(), filters={HiddenFileFilter()}):
-    select = SingleSelect(path, PathSort(filters=filters))
+def filer(
+    path: Path = Path.cwd(),
+    sort_by: Literal["name", "created", "accesed", "modified", "size"] = "name",
+    sort_order: Literal["ascending", "descending"] = "ascending",
+    filters: set[Callable[[Path], bool]] = {HiddenFileFilter()}
+):
+    select = SingleSelect(path, PathSort(sort_by, sort_order, filters=filters))
     rename: SingleRename | None = None
     modeswitch: ModeSwitch = None  # type: ignore
     app: Close = None  # type: ignore
@@ -486,12 +491,3 @@ def _scrollview(widgets: list, center: int, height: int):
     istart = max(0, center - ostart)
     iend = min(center + oend - 1, len(widgets))
     return widgets[istart:iend]
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and (wd := sys.argv[1]):
-        path = Path(wd)
-        path = path if path.is_dir() else path.parent
-    else:
-        path = Path.cwd()
-    print(filer(path))
