@@ -1,3 +1,5 @@
+#! /bin/env python3
+
 import glob
 import subprocess
 import sys
@@ -25,7 +27,7 @@ def clean():
 
 @cli.command()
 def fix():
-    sh("black", ".", "--target-version", "py310")
+    sh("black", ".")
 
 
 if __name__ == "__main__":

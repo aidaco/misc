@@ -1,22 +1,6 @@
-from pathlib import Path
-from typing import Literal
-
 import cyclopts
 
-from .filer import filer as run_filer, HiddenFileFilter
+from .filer_cli import cli as filer
 
 cli = cyclopts.App()
-
-@cli.command()
-def filer(
-    wd: Path = Path.cwd(),
-    sort_by: Literal["name", "created", "accesed", "modified", "size"] = "name",
-    sort_order: Literal["ascending", "descending"] = "ascending",
-    show_hidden: bool = False
-):
-    run_filer(
-        path=wd,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        filters={} if show_hidden else {HiddenFileFilter()}
-    )
+cli.command(filer, name=["filer", "f"])

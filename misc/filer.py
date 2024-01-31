@@ -1,22 +1,69 @@
 from pathlib import Path
-import sys
 import shutil
 from math import ceil
 from dataclasses import dataclass, field
 from operator import attrgetter
-from typing import Any, Callable, ClassVar, Literal
-import os
+from typing import Any, Callable, ClassVar, Literal, Protocol, ForwardRef
+import time
 import stat
-from itertools import chain, pairwise
-from rich.measure import Measurement
+from itertools import chain, pairwise, islice
+from types import NoneType
+from threading import Thread
 
+from rich.measure import Measurement
 from rich.text import Text
 from rich.console import Group, ConsoleOptions, Console, RenderableType
 from rich.table import Table, Column
-from rich.style import StyleType
+from rich.style import Style
 
-from twidge.core import RunBuilder, Event, HandlerType
+from twidge.core import RunBuilder, Event, HandlerType, Dispatcher, StrEvent
 from twidge.widgets import EditString, Close
+
+
+@dataclass
+class StackView[T: RenderableType]:
+    stack: list[T]
+
+    def __rich__(self) -> RenderableType:
+        table = Table(
+            *(Column() for _ in self.stack),
+            padding=(0, 1),
+            collapse_padding=True,
+            pad_edge=False,
+            show_header=False,
+            show_edge=False,
+        )
+        table.add_row(*self.stack)
+        return table
+
+
+@dataclass
+class OffsetScroller[T: RenderableType]:
+    views: list[T]
+    offset: int
+
+    def __rich_measure__(self, console: Console, options: ConsoleOptions):
+        if not self.views:
+            return Measurement(0, 0)
+        m = max(*(console.measure(v) for v in self.views))
+        if isinstance(m, int):
+            return Measurement(m, m)
+        return m
+
+    def __rich_console__(self, console: Console, options: ConsoleOptions):
+        if not self.views:
+            yield Text("")
+        height = options.max_height - 1
+        center = self.offset
+        ostart = ceil(height / 2)
+        oend = ceil(height / 2)
+        istart = max(0, center - ostart)
+        iend = min(center + oend - 1, len(self.views))
+        dstart = ostart - len(self.views[istart:center])
+        dend = oend - len(self.views[center:iend])
+        fstart = max(0, istart - dend)
+        fend = min(len(self.views), iend + dstart)
+        yield Group(*self.views[fstart:fend])
 
 
 @dataclass
@@ -50,149 +97,462 @@ class HiddenFileFilter:
         return path.name.startswith(".")
 
 
+def focused_text(text: Text) -> Text:
+    text.stylize(Style(color="black", bgcolor="bright_white"))
+    return text
+
+
 @dataclass
 class PathView:
     path: Path
-    style: StyleType
-
-    def __rich__(self) -> RenderableType:
-        return Text(self.path.name, style=self.style)
-
-
-@dataclass
-class StackView:
-    stack: list[RenderableType]
-    view: RenderableType = ""
-
-    def __post_init__(self):
-        self.reload()
-
-    def reload(self):
-        self.view = Table(
-            *(Column() for _ in self.stack),
-            padding=(0, 1),
-            collapse_padding=True,
-            pad_edge=False,
-            show_header=False,
-            show_edge=True,
+    state: dict[str, NoneType] = field(default_factory=dict)
+    state_format: ClassVar[dict[str, Callable[[Text], Text]]] = {
+        "focused": focused_text,
+        "selected": lambda text: Text(
+            ">", style=Style(color="bright_yellow", blink=True)
         )
-        self.view.add_row(*self.stack)
+        + text
+        + Text("<", style=Style(color="bright_yellow", blink=True)),
+    }
+
+    def add_state(self, state: str):
+        self.state[state] = None
+
+    def remove_state(self, state: str):
+        self.state.pop(state, None)
 
     def __rich__(self) -> RenderableType:
-        return self.view
-
-
-@dataclass
-class OffsetScroller:
-    views: list
-    offset: int
-
-    def __rich_measure__(self, console: Console, options: ConsoleOptions):
-        m = max(*(console.measure(v) for v in self.views))
-        if isinstance(m, int):
-            return Measurement(m, m)
-        return m
-
-    def __rich_console__(self, console: Console, options: ConsoleOptions):
-        widgets = _scrollview(self.views, self.offset, options.max_height)
-        yield Group(*widgets)
+        text = Text(self.path.name)
+        for state in self.state:
+            text = self.state_format[state](text)
+        return text
 
 
 @dataclass
 class DirectoryView:
     paths: list[Path]
-    scroll_offset: int
-    selected: set[int] = field(default_factory=set)
     pathviews: list[PathView] = field(default_factory=list)
-    view: RenderableType = field(init=False)
+    view: OffsetScroller = field(init=False)
 
     def __post_init__(self):
+        self.pathviews = []
+        self.view = OffsetScroller(self.pathviews, 0)
         self.reload()
 
     def reload(self):
-        self.pathviews = [
-            PathView(
-                path,
-                "bright_white"
-                if ix not in self.selected
-                else "bright_black on bright_white",
-            )
-            for ix, path in enumerate(self.paths)
-        ]
-        self.view = OffsetScroller(self.pathviews, self.scroll_offset)
+        self.pathviews.clear()
+        self.pathviews.extend(PathView(path) for path in self.paths)
 
     def __rich__(self) -> RenderableType:
         return self.view
 
 
 @dataclass
-class PathPreview:
+class PathAnalyser:
     path: Path
-    stat: os.stat_result
-    children: list[Path] | None = None
-
-    def __rich__(self):
-        parts: list[RenderableType] = [
-            f"User: {self.path.owner()}",
-            f"Group: {self.path.group()}",
-            f"Mode: {stat.filemode(self.stat.st_mode)}",
-            f"Size: {humanize_bytes(self.stat.st_size)}",
-        ]
-        if self.children is not None:
-            parts.append(f"Items: {len(self.children)}")
-
-        return Group(*parts)
-
-
-@dataclass
-class DirectoryStackSelectView:
-    path: Path
-    path_stat: os.stat_result
-    path_contents: list[Path] | None
-    parents: list[Path]
-    parents_contents: list[list[Path]]
-    directoryviews: list[DirectoryView] = field(init=False)
-    preview: PathPreview = field(init=False)
-    view: RenderableType = field(init=False)
+    parts: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         self.reload()
 
     def reload(self):
-        self.preview = PathPreview(self.path, self.path_stat, self.path_contents)
-        path_info = zip(
-            pairwise(chain(self.parents, [self.path])),
-            self.parents_contents,
+        self.parts.append(f"Owner: {self.path.owner()}:{self.path.group()}")
+        st = self.path.stat()
+        self.parts.append(f"Mode: {stat.filemode(st.st_mode)}")
+        self.parts.append(f"Size: {humanize_bytes(st.st_size)}")
+        if self.path.is_symlink():
+            self.parts.append(f"Link to: {self.path.readlink()}")
+
+    def stop(self):
+        pass
+
+    def __rich__(self):
+        return Group(*self.parts)
+
+
+@dataclass
+class DirectoryAnalyser:
+    path: Path
+    file_count: int = 0
+    directory_count: int = 0
+    total_size: int = 0
+    file_types: set[str] = field(default_factory=set)
+    running: bool = True
+
+    def __post_init__(self):
+        Thread(target=self.analyse).start()
+
+    def analyse(self):
+        for path, directories, files in self.path.walk():
+            if not self.running:
+                return
+            self.directory_count += len(directories)
+            self.file_count += len(files)
+            for file in files:
+                file = path / file
+                self.file_types.add(file.suffix.lstrip("."))
+                try:
+                    self.total_size += file.stat().st_size
+                except IOError:
+                    ...
+        self.running = False
+
+    def stop(self):
+        self.running = False
+
+    def __rich__(self):
+        return Group(
+            f"Files: {self.file_count}",
+            f"Directories: {self.directory_count}",
+            f"Total Size: {humanize_bytes(self.total_size)}",
+            f'File Types: [{", ".join(self.file_types)}]',
         )
+
+
+class Analyser(Protocol):
+    def __rich__(self) -> RenderableType:
+        ...
+
+    def stop(self):
+        ...
+
+
+@dataclass
+class PathPreview:
+    select: "Select"
+    sort: PathSort
+    parts: list[Analyser] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.reload()
+
+    def reload(self):
+        for part in self.parts:
+            part.stop()
+        self.parts.clear()
+        if self.select.focused:
+            path = self.select.focused
+            self.parts.append(PathAnalyser(path))
+            if path.is_file():
+                ...
+            elif path.is_dir():
+                self.parts.append(DirectoryAnalyser(path))
+
+    def __rich__(self):
+        return Group(*self.parts)
+
+
+@dataclass
+class ParentsView:
+    select: "Select"
+    sort: PathSort
+    directoryviews: list[DirectoryView] = field(init=False)
+    view: RenderableType = field(init=False)
+
+    def __post_init__(self):
         self.directoryviews = []
-        for (path, selected), paths in path_info:
+        self.view = StackView(self.directoryviews)
+        self.reload()
+
+    def reload(self):
+        self.directoryviews.clear()
+        root = self.select.path
+        path_info = pairwise(chain(reversed(list(root.parents)[:2]), [root]))
+        for path, selected in path_info:
+            paths = self.sort(path.iterdir())
+            view = DirectoryView(paths)
             try:
                 ix = paths.index(selected)
             except ValueError:
                 ix = 0
-            view = DirectoryView(paths, ix, {ix})
+            view.pathviews[ix].add_state("focused")
             self.directoryviews.append(view)
-        self.view = StackView([*self.directoryviews, self.preview])
 
     def __rich__(self):
         return self.view
 
 
 @dataclass
-class DirectoryStackRenameView:
+class Select:
     path: Path
-    editor: EditString
-    selectview: DirectoryStackSelectView
+    sort: PathSort
+    cursor: int = 0
+    selection: set[Path] = field(default_factory=set)
+    paths: list[Path] = field(default_factory=list)
+    parentview: ParentsView = field(init=False)
+    currentview: DirectoryView = field(init=False)
+    preview: PathPreview = field(init=False)
+    parts: list = field(default_factory=list)
+    view: RenderableType = field(init=False)
+
+    @property
+    def focused(self):
+        try:
+            return self.paths[self.cursor]
+        except IndexError:
+            self.cursor = max(0, len(self.paths) - 1)
+            if not self.paths:
+                return None
+            return self.paths[self.cursor]
 
     def __post_init__(self):
+        self.currentview = DirectoryView(self.paths)
+        self.parentview = ParentsView(self, self.sort)
+        self.preview = PathPreview(self, self.sort)
+        self.parts = [self.parentview, self.currentview, self.preview]
+        self.view = StackView(self.parts)
+        self.reload_paths()
         self.reload()
 
+    def reload_paths(self):
+        self.paths.clear()
+        self.paths.extend(self.sort(self.path.iterdir()))
+
     def reload(self):
-        ix = self.selectview.directoryviews[-1].paths.index(self.path)
-        self.selectview.directoryviews[-1].pathviews[ix] = self.editor
+        self.currentview.reload()
+        self.parentview.reload()
+        self.preview.reload()
+        if self.focused:
+            self.currentview.pathviews[self.cursor].add_state("focused")
+        for pv in self.currentview.pathviews:
+            if pv.path in self.selection:
+                pv.add_state("selected")
+        for dv in self.parentview.directoryviews:
+            for pv in dv.pathviews:
+                if pv.path in self.selection:
+                    pv.add_state("selected")
+
+    def toggle_select_focused(self):
+        if self.focused:
+            path = self.focused
+            if path in self.selection:
+                self.selection.remove(path)
+                self.currentview.pathviews[self.cursor].remove_state("selected")
+            else:
+                self.selection.add(path)
+                self.currentview.pathviews[self.cursor].add_state("selected")
+
+    def cursor_bottom(self):
+        self.currentview.pathviews[self.cursor].remove_state("focused")
+        self.cursor = 0
+        self.currentview.pathviews[self.cursor].add_state("focused")
+        self.preview.reload()
+
+    def cursor_top(self):
+        self.currentview.pathviews[self.cursor].remove_state("focused")
+        self.cursor = len(self.currentview.pathviews) - 1
+        self.currentview.view.offset = self.cursor
+        self.currentview.pathviews[self.cursor].add_state("focused")
+        self.preview.reload()
+
+    def cursor_down(self):
+        self.currentview.pathviews[self.cursor].remove_state("focused")
+        self.cursor = min(len(self.currentview.pathviews) - 1, self.cursor + 1)
+        self.currentview.view.offset = self.cursor
+        self.currentview.pathviews[self.cursor].add_state("focused")
+        self.preview.reload()
+
+    def cursor_up(self):
+        self.currentview.pathviews[self.cursor].remove_state("focused")
+        self.cursor = max(0, self.cursor - 1)
+        self.currentview.view.offset = self.cursor
+        self.currentview.pathviews[self.cursor].add_state("focused")
+        self.preview.reload()
+
+    def cursor_left(self):
+        current = self.path
+        self.path = self.path.parent
+        self.reload_paths()
+        try:
+            self.cursor = self.paths.index(current)
+            self.currentview.view.offset = self.cursor
+        except ValueError:
+            ...
+        self.reload()
+        self.preview.reload()
+
+    def cursor_right(self):
+        if self.focused:
+            path = self.focused
+            if not path.is_dir():
+                return
+            self.path = path
+            self.cursor = 0
+            self.currentview.view.offset = self.cursor
+            self.reload_paths()
+            self.reload()
+            self.preview.reload()
+            self.parentview.reload()
+
+    @property
+    def result(self):
+        return self.selection
 
     def __rich__(self):
-        return self.selectview
+        return self.view
+
+
+@dataclass
+class RenameView:
+    select: Select
+    path: Path | None = None
+    editor: EditString = field(init=False)
+
+    def __post_init__(self):
+        self.next_path()
+        self.reload()
+
+    def next_path(self):
+        try:
+            self.path = self.select.selection.pop()
+            self.reload()
+        except KeyError:
+            self.path = None
+            self.select.reload_paths()
+            self.select.reload()
+
+    def reload(self):
+        if self.path is None:
+            return
+        self.editor = EditString(self.path.name)
+        self.select.path = self.path
+        if self.path.is_dir():
+            self.select.path = self.path
+            self.select.reload_paths()
+        else:
+            self.select.path = self.path.parent
+            self.select.reload_paths()
+            self.select.cursor = self.select.paths.index(self.path)
+        self.select.reload()
+        self.select.currentview.pathviews[self.select.cursor] = self.editor
+
+    def rename(self):
+        path = self.path.rename(self.path.with_name(self.editor.result))
+        if path.is_dir():
+            for sub in self.select.selection.copy():
+                if sub.is_relative_to(path):
+                    self.select.selection.discard(sub)
+
+    def __rich__(self):
+        return self.select
+
+
+class Widget(Protocol):
+    def dispatch(self, event: Event):
+        ...
+
+    def __rich__(self) -> RenderableType:
+        ...
+
+
+@dataclass
+class Explorer:
+    cwd: Path
+    sort: PathSort
+    select: Select = field(init=False)
+    view: RenderableType = field(init=False)
+
+    run: ClassVar = RunBuilder()
+
+    def __post_init__(self):
+        self.select = Select(self.cwd, self.sort)
+        self.dispatch = Dispatcher()
+        self.select_mode()
+
+    def delete_selection(self) -> None:
+        if not self.select.selection:
+            return
+        for path in self.select.selection:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.is_file():
+                path.unlink(missing_ok=True)
+        self.select.selection.clear()
+        self.select.reload_paths()
+        self.select.reload()
+
+    def rename_selection(self):
+        if not self.select.selection:
+            return
+
+        rename = RenameView(self.select)
+
+        def do_rename():
+            rename.rename()
+            if not self.select.selection:
+                self.select_mode()
+            rename.next_path()
+            rename.reload()
+
+        def cancel_rename():
+            if not self.select.selection:
+                self.select_mode()
+            rename.next_path()
+            rename.reload()
+
+        self.dispatch.replace(
+            table={
+                StrEvent("enter"): do_rename,
+                StrEvent("escape"): cancel_rename,
+            },
+            default=lambda e: rename.editor.dispatch(e),
+        )
+        self.view = rename
+
+    def copy_selection(self):
+        def do_copy():
+            dest = self.select.path
+            for src in self.select.selection:
+                if src.is_dir():
+                    shutil.copytree(src, dest)
+                else:
+                    shutil.copy2(src, dest)
+            time.sleep(1)
+            self.select.selection.clear()
+            self.select.reload_paths()
+            self.select_mode()
+
+        def cancel_copy():
+            self.select_mode()
+
+        self.dispatch.replace(
+            table={
+                "g": self.select.cursor_top,
+                "G": self.select.cursor_bottom,
+                "h": self.select.cursor_left,
+                "j": self.select.cursor_down,
+                "k": self.select.cursor_up,
+                "l": self.select.cursor_right,
+                "v": do_copy,
+                "escape": cancel_copy,
+            },
+            default=None,
+        )
+
+    def select_mode(self):
+        self.view = self.select
+        self.dispatch.replace(
+            table={
+                StrEvent("g"): self.select.cursor_top,
+                StrEvent("G"): self.select.cursor_bottom,
+                StrEvent("h"): self.select.cursor_left,
+                StrEvent("j"): self.select.cursor_down,
+                StrEvent("k"): self.select.cursor_up,
+                StrEvent("l"): self.select.cursor_right,
+                StrEvent("space"): self.select.toggle_select_focused,
+                StrEvent("d"): self.delete_selection,
+                StrEvent("r"): self.rename_selection,
+                StrEvent("c"): self.copy_selection,
+            },
+            default=lambda e: None,
+        )
+
+    @property
+    def result(self):
+        return self.select.selection
+
+    def __rich__(self):
+        return self.view
 
 
 def humanize_bytes(bytes, precision=1):
@@ -211,283 +571,10 @@ def humanize_bytes(bytes, precision=1):
     return f"{relbytes:.{precision}f} {suffix}"
 
 
-@dataclass
-class SingleSelect:
-    wd: Path
-    sort: PathSort
-    cursor: int = 0
-
-    paths: list[Path] = field(init=False)
-    view: DirectoryStackSelectView = field(init=False)
-
-    def __post_init__(self):
-        self.reload_paths()
-
-    def clamp_cursor(self) -> None:
-        self.cursor = max(0, min(self.cursor, len(self.paths) - 1))
-
-    def reload_paths(self) -> None:
-        self.paths = self.sort(self.wd.iterdir())
-        self.clamp_cursor()
-        self.reload_view()
-
-    def reload_view(self) -> None:
-        selection = self.selection
-        if selection:
-            parents = list(selection.parents)[:2][::-1]
-            contents = [self.sort(path.iterdir()) for path in parents]
-            self.view = DirectoryStackSelectView(
-                selection,
-                selection.stat(),
-                list(selection.iterdir()) if selection.is_dir() else None,
-                parents,
-                contents,
-            )
-
-    @property
-    def selection(self) -> Path | None:
-        try:
-            return self.paths[self.cursor]
-        except IndexError:
-            self.clamp_cursor()
-        try:
-            return self.paths[self.cursor]
-        except IndexError:
-            return None
-
-    def cursor_top(self):
-        self.cursor = 0
-        self.reload_view()
-
-    def cursor_bottom(self):
-        self.cursor = len(self.paths) - 1
-        self.reload_view()
-
-    def cursor_down(self):
-        self.cursor += 1
-        self.clamp_cursor()
-        self.reload_view()
-
-    def cursor_up(self):
-        self.cursor -= 1
-        self.clamp_cursor()
-        self.reload_view()
-
-    def cursor_left(self):
-        selection = self.wd
-        self.wd = self.wd.parent
-        self.reload_paths()
-        try:
-            self.cursor = self.paths.index(selection)
-        except ValueError:
-            ...
-        self.reload_view()
-
-    def delete_selection(self) -> None:
-        path = self.selection
-        if not path:
-            return
-        if path.is_dir():
-            shutil.rmtree(path, ignore_errors=True)
-        elif path.is_file():
-            path.unlink(missing_ok=True)
-        self.reload_paths()
-
-    def cursor_right(self):
-        selection = self.selection
-        if selection and selection.is_dir() and len(list(selection.iterdir())) > 0:
-            self.wd = selection
-            self.reload_paths()
-
-    @property
-    def result(self) -> Path | None:
-        return self.selection
-
-    def __rich__(self):
-        return self.view
-
-
-@dataclass
-class SingleRename:
-    path: Path
-    selectview: DirectoryStackSelectView
-    editor: EditString = field(init=False)
-    view: DirectoryStackRenameView = field(init=False)
-
-    def __post_init__(self):
-        self.editor = EditString(self.path.name)
-        self.reload()
-
-    def reload(self) -> None:
-        self.view = DirectoryStackRenameView(self.path, self.editor, self.selectview)
-
-    def finish(self) -> None:
-        self.path.rename(self.path.with_name(self.editor.result))
-        self.selectview.reload()
-
-    def __rich__(self):
-        return self.view
-
-
-@dataclass
-class Mode:
-    widget: Any | Callable[[], Any]
-    table: dict[Event, HandlerType]
-    default: Callable[[Event], None] | None = None
-
-    def dispatch(self, event):
-        handler = self.table.get(event, None)
-        if handler:
-            handler()
-        elif self.default:
-            self.default(event)
-
-
-@dataclass
-class ModeSwitch:
-    modes: dict[str, Mode]
-    mode: str
-
-    run: ClassVar = RunBuilder()
-
-    @property
-    def widget(self):
-        o = self.modes[self.mode].widget
-        if not callable(o):
-            return o
-        else:
-            return o()
-
-    def set_mode(self, mode):
-        self.mode = mode
-
-    def dispatch(self, event: Event) -> None:
-        self.modes[self.mode].dispatch(event)
-
-    def __rich__(self):
-        return self.widget
-
-    @property
-    def result(self):
-        return self.widget.result
-
-
 def filer(
     path: Path = Path.cwd(),
     sort_by: Literal["name", "created", "accesed", "modified", "size"] = "name",
     sort_order: Literal["ascending", "descending"] = "ascending",
-    filters: set[Callable[[Path], bool]] = {HiddenFileFilter()}
+    filters: set[Callable[[Path], bool]] = {HiddenFileFilter()},
 ):
-    select = SingleSelect(path, PathSort(sort_by, sort_order, filters=filters))
-    rename: SingleRename | None = None
-    modeswitch: ModeSwitch = None  # type: ignore
-    app: Close = None  # type: ignore
-    copying: Path | None = None
-
-    def start_rename():
-        nonlocal rename
-        if modeswitch.mode != "select" or not select.selection:
-            return
-        rename = SingleRename(select.selection, select.view)
-        modeswitch.set_mode("rename")
-
-    def dispatch_rename(event):
-        if rename:
-            rename.editor.dispatch(event)
-
-    def cancel_rename():
-        nonlocal rename
-        if modeswitch.mode != "rename" or not rename:
-            return
-        rename = None
-        select.reload_view()
-        modeswitch.set_mode("select")
-
-    def finish_rename():
-        nonlocal rename
-        if modeswitch.mode != "rename" or not rename:
-            return
-
-        rename.finish()
-        rename = None
-        select.reload_paths()
-        modeswitch.set_mode("select")
-
-    def start_copying():
-        nonlocal copying
-        if modeswitch.mode != "select" or not select.selection:
-            return
-        copying = select.selection
-        print(f"{copying=}")
-        modeswitch.set_mode("copying")
-
-    def cancel_copying():
-        nonlocal copying
-        copying = None
-
-    def finish_copying():
-        nonlocal copying
-        if modeswitch.mode != "copying" or not copying or not select.selection:
-            return
-        dest = (
-            select.selection.parent if select.selection.is_file() else select.selection
-        )
-        shutil.copy2(copying, dest)
-        print(f"{copying=} {dest}")
-        copying = None
-        select.reload_paths()
-        modeswitch.set_mode("select")
-
-    modeswitch = ModeSwitch(
-        modes={
-            "select": Mode(
-                select,
-                {
-                    "g": select.cursor_top,
-                    "G": select.cursor_bottom,
-                    "h": select.cursor_left,
-                    "j": select.cursor_down,
-                    "k": select.cursor_up,
-                    "l": select.cursor_right,
-                    "d": select.delete_selection,
-                    "c": start_copying,
-                    "q": lambda: app.run.stop(),
-                    "r": start_rename,
-                },
-            ),
-            "rename": Mode(
-                lambda: rename,
-                {
-                    "enter": finish_rename,
-                    "escape": cancel_rename,
-                },
-                dispatch_rename,
-            ),
-            "copying": Mode(
-                select,
-                {
-                    "g": select.cursor_top,
-                    "G": select.cursor_bottom,
-                    "h": select.cursor_left,
-                    "j": select.cursor_down,
-                    "k": select.cursor_up,
-                    "l": select.cursor_right,
-                    "q": lambda: app.run.stop(),
-                    "v": finish_copying,
-                    "escape": cancel_copying,
-                },
-            ),
-        },
-        mode="select",
-    )
-    app = Close(modeswitch)
-    return app.run()
-
-
-def _scrollview(widgets: list, center: int, height: int):
-    height -= 1
-    ostart = ceil(height / 2)
-    oend = ceil(height / 2)
-    istart = max(0, center - ostart)
-    iend = min(center + oend - 1, len(widgets))
-    return widgets[istart:iend]
+    return Close(Explorer(path, PathSort(sort_by, sort_order, filters=filters))).run()
