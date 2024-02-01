@@ -15,9 +15,11 @@ def explore(
     sort_order: Literal["ascending", "descending"] = "ascending",
     show_hidden: bool = False,
 ):
-    filer(
+    print(*(
+        f'"{path}"' for path in
+        filer(
         path=wd,
         sort_by=sort_by,
         sort_order=sort_order,
         filters=set() if show_hidden else {HiddenFileFilter()},
-    )
+    )))
