@@ -59,5 +59,5 @@ class DictApp(App):
 
 
 if __name__ == "__main__":
-    result = DictApp('name', 'age').run()
+    result = DictApp(*input().split(',')).run()
     print(result)
