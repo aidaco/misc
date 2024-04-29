@@ -83,7 +83,7 @@ class PercentDisplay(StatDisplay):
         self.get_percent = get_percent
 
     def render(self, width: int, height: int) -> RenderableType:
-        return Text(f"[{self.name} : {self.get_percent():.1%}]", style=self.style)
+        return Text(f"[{self.name} : {self.get_percent(): >4.1%}]", style=self.style)
 
 
 class PercentBarDisplay(PercentDisplay):
@@ -111,7 +111,7 @@ class HGroup:
             show_lines=False,
             pad_edge=False,
             collapse_padding=True,
-            expand=False,
+            expand=True,
             padding=0,
             border_style=self.style,
         )
@@ -161,10 +161,11 @@ def main(orientation: Literal["vertical", "horizontal"] = "vertical", bar: bool 
                     pct_cls("CPU", lambda: psutil.cpu_percent() / 100, style=style),
                     style=style,
                 ),
-                Panel(CurrentWorkingDirectoryDisplay(style=style), border_style=style),
+                # Panel(CurrentWorkingDirectoryDisplay(style=style), border_style=style),
+                CurrentWorkingDirectoryDisplay(style=style),
             )
     try:
-        with Live(widget, screen=True, refresh_per_second=2):
+        with Live(widget, screen=True, refresh_per_second=1):
             while True:
                 pass
     except KeyboardInterrupt:
