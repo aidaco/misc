@@ -10,23 +10,22 @@ from typer import Typer
 from openai import OpenAI
 
 
-key = open('/home/aidan/.secrets/openai-api-key').read().strip()
+key = open("/home/tuesday/documents/Secrets/openai-api-key").read().strip()
 client = OpenAI(api_key=key)
 
-OUTDIR = Path('results')
+OUTDIR = Path("results")
 
 
 def generate_image(
     prompt: str,
     output_dir: Path,
     output_tag: str | None = None,
-    model: Literal['dall-e-3',  'dall-e-2'] = 'dall-e-3',
-    size: Literal['1024x1024', '1792x1024', '1024x1792'] = '1792x1024',
-    quality: Literal['standard', 'hd'] = 'hd',
-    style: Literal['vivid', 'natural'] = 'vivid',
+    model: Literal["dall-e-3", "dall-e-2"] = "dall-e-3",
+    size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024",
+    quality: Literal["standard", "hd"] = "hd",
+    style: Literal["vivid", "natural"] = "vivid",
 ):
-
-    tag = output_tag if output_tag is not None else f'{time_ns():x}'
+    tag = output_tag if output_tag is not None else f"{time_ns():x}"
     parameters = dict(
         model=model,
         prompt=prompt,
@@ -34,21 +33,35 @@ def generate_image(
         quality=quality,
     )
 
-    url = client.images.generate(
-        **parameters,
-        n=1
-    ).data[0].url
+    url = client.images.generate(**parameters, n=1).data[0].url
     with urllib.request.urlopen(url) as remote:
-        with (output_dir/f'{tag}.png').open('wb') as local:
+        with (output_dir / f"{tag}.png").open("wb") as local:
             local.write(remote.read())
-    with (output_dir/f'{tag}.txt').open('w') as prompt_store:
-        prompt_store.writelines([
-            '{',
-            *(
-                '\t'f"'{k}': '{v}'" for k, v in parameters.items()
-            ),
-            '}',
-        ])
+
+
+def update_metadata(
+    prompt: str,
+    output_dir: Path,
+    output_tag: str | None = None,
+    model: Literal["dall-e-3", "dall-e-2"] = "dall-e-3",
+    size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024",
+    quality: Literal["standard", "hd"] = "hd",
+):
+    tag = output_tag if output_tag is not None else f"{time_ns():x}"
+    parameters = dict(
+        model=model,
+        prompt=prompt,
+        size=size,
+        quality=quality,
+    )
+    with (output_dir / f"{tag}.txt").open("w") as prompt_store:
+        prompt_store.writelines(
+            [
+                "{",
+                *("\t" f"'{k}': '{v}'" for k, v in parameters.items()),
+                "}",
+            ]
+        )
 
 
 def find_strs(o):
@@ -62,19 +75,26 @@ def find_strs(o):
             for e in o:
                 yield from find_strs(e)
         case _:
-            print(f'unable to process {o}')
+            print(f"unable to process {o}")
 
 
 def generate_variations(prompt: str) -> list[str]:
-    response = client.chat.completions.create(
-      model="gpt-4-1106-preview",
-      messages=[
-        {"role": "system", "content": "You are a helpful assistant that generates more optimized and intricately detailed suggestions for prompts to be given to an AI image generation model. Please responde only with a JSON object with a 'suggested_prompts' key holding an array with 5 suggested prompts of 100 to 200 words."},
-        {"role": "user", "content": prompt},
-      ],
-      n=1,
-      response_format={"type": "json_object"},
-    ).choices[0].message.content
+    response = (
+        client.chat.completions.create(
+            model="gpt-4-1106-preview",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that generates more optimized and intricately detailed suggestions for prompts to be given to an AI image generation model. Please responde only with a JSON object with a 'suggested_prompts' key holding an array with 5 suggested prompts of 100 to 200 words.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            n=1,
+            response_format={"type": "json_object"},
+        )
+        .choices[0]
+        .message.content
+    )
 
     return [s for s in find_strs(json.loads(response)) if moderate_prompt(s)]
 
@@ -86,15 +106,12 @@ def moderate_prompt(prompt: str) -> bool:
 
 def generate_image_variations(prompt: str):
     if not moderate_prompt(prompt):
-        raise ValueError('bad prompt')
-    tag = f'{datetime.now():%Y-%m-%d %H-%M-%S}'
-    print(f'TAG: {tag}')
+        raise ValueError("bad prompt")
+    tag = f"{datetime.now():%Y-%m-%d %H-%M-%S}"
+    print(f"TAG: {tag}")
 
-    prompts = [
-        prompt,
-        *generate_variations(prompt)
-    ]
-    
+    prompts = [prompt, *generate_variations(prompt)]
+
     prompt_dir = OUTDIR / tag
     prompt_dir.mkdir(parents=True, exist_ok=False)
     for p in prompts:
@@ -118,5 +135,5 @@ def variations(prompt: str):
     generate_image_variations(prompt)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     cli()
