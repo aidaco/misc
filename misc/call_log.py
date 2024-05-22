@@ -1,9 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 import pysqlite3 as sqlite3
-from typing import Self, Annotated
-import contextlib
+from typing import Self, Annotated, ClassVar, Iterator
 from urllib.parse import quote
+from textwrap import dedent
 
 from fastapi import FastAPI, Form, Depends, Query, Cookie, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -24,51 +24,103 @@ sqlite3.register_converter(
 )
 
 
-def connectdb() -> sqlite3.Connection:
-    connection = sqlite3.connect(db_uri)
-    connection.row_factory = sqlite3.Row
-    connection.executescript(CONNECT_CONFIG)
-    connection.executescript(CREATE_TABLES)
-    return connection
+class TableMeta(type):
+    CREATE: ClassVar[str]
+    NAME: ClassVar[str]
+    database: ClassVar["Database"]
+
+    def __new__(cls, name, bases, dct):
+        instance = super().__new__(cls, name, bases, dct)
+        instance = dataclass(instance)
+        if name != "Table":
+            Database.add_table(instance)
+        return instance
+
+    @classmethod
+    def set_database(cls, database: "Database") -> None:
+        cls.database = database
+
+    def get[T: "TableMeta"](self: type[T], id: int) -> T:
+        return self(
+            **self.database.queryone(f"SELECT * FROM {self.NAME} WHERE id=?", (id,))
+        )
+
+    def all[T: "TableMeta"](self: type[T]) -> Iterator[T]:
+        yield from (
+            self(**row) for row in self.database.query(f"SELECT * FROM {self.NAME}")
+        )
+
+    def where[T: "TableMeta"](self: type[T], *predicates, **values) -> Iterator[T]:
+        predicates = [
+            *predicates,
+            *(f"{column}=?" for column in values),
+        ]
+        yield from (
+            self(**row)
+            for row in self.database.query(
+                f"SELECT * FROM {self.NAME} WHERE {" AND ".join(predicates)}",
+                tuple(values.values()),
+            )
+        )
 
 
-CONNECT_CONFIG = """
-PRAGMA journal_mode = WAL;
-PRAGMA synchronous = normal;
-PRAGMA temp_store = memory;
-PRAGMA mmap_size = 30000000000;
-PRAGMA foreign_keys = on;
-PRAGMA auto_vacuum = incremental;
-"""
-CREATE_TABLES = """
-CREATE TABLE IF NOT EXISTS user(
-    id integer primary key autoincrement,
-    name text not null unique,
-    password_hash text not null,
-    created_at datetime not null,
-    updated_at datetime
-);
-CREATE TABLE IF NOT EXISTS call(
-    id integer primary key autoincrement,
-    received_at datetime not null,
-    received_by_id integer not null,
-    number text,
-    caller text,
-    notes text,
-    created_at datetime not null,
-    updated_at datetime
-);
-CREATE TABLE IF NOT EXISTS task(
-    id integer primary key autoincrement,
-    user_id integer not null,
-    call_id integer,
-    name text not null,
-    notes text,
-    created_at datetime not null,
-    updated_at datetime,
-    completed_at datetime
-);
-"""
+@dataclass
+class Database:
+    uri: str = ":memory:"
+    connection: sqlite3.Connection | None = None
+    connect_config: str = dedent("""
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = normal;
+        PRAGMA temp_store = memory;
+        PRAGMA mmap_size = 30000000000;
+        PRAGMA foreign_keys = on;
+        PRAGMA auto_vacuum = incremental;
+    """)
+    tables: ClassVar[set[type[TableMeta]]] = set()
+
+    def __post_init__(self) -> None:
+        for table in self.tables:
+            table.set_database(self)
+
+    def connect(self) -> sqlite3.Connection:
+        if self.connection is None:
+            connection = sqlite3.connect(self.uri)
+            connection.row_factory = sqlite3.Row
+            connection.executescript(self.connect_config)
+            connection.executescript(
+                ";".join(dedent(table.CREATE) for table in self.tables)
+            )
+            self.connection = connection
+        return self.connection
+
+    def query(self, query, *args, **kwargs):
+        print(query)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(dedent(query), *args, **kwargs)
+            yield from cursor
+
+    def queryone(self, query, *args, **kwargs):
+        print(query)
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(dedent(query), *args, **kwargs)
+            return cursor.fetchone()
+
+    def exec(self, *args, **kwargs):
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.executescript(*args, **kwargs)
+
+    @classmethod
+    def add_table[T: type[TableMeta]](cls, table_cls: T) -> T:
+        cls.tables.add(table_cls)
+        return table_cls
+
+
+class Table(metaclass=TableMeta): ...
+
+
 CLOSE_CONFIG = """
 PRAGMA vacuum;
 PRAGMA incremental_vacuum;
@@ -76,8 +128,15 @@ PRAGMA optimize;
 """
 
 
-@dataclass
-class User:
+class User(Table):
+    CREATE: ClassVar[str] = """CREATE TABLE IF NOT EXISTS user(
+        id integer primary key autoincrement,
+        name text not null unique,
+        password_hash text not null,
+        created_at datetime not null,
+        updated_at datetime
+    )"""
+    NAME: ClassVar[str] = "user"
     id: int
     name: str
     password_hash: str
@@ -87,40 +146,23 @@ class User:
     @classmethod
     def create(
         cls,
-        connection: sqlite3.Connection,
         name: str,
         password: str,
     ) -> Self:
-        with connection:
-            cursor = connection.cursor()
-            row = cursor.execute(
+        return cls(
+            **cls.database.queryone(
                 "INSERT INTO user(name, password_hash, created_at) VALUES (?,?,?) RETURNING *;",
                 (
                     name,
                     hasher.hash(password),
                     datetime.now(timezone.utc),
                 ),
-            ).fetchone()
-            user = cls(**row)
-            connection.commit()
-        return user
+            )
+        )
 
     @classmethod
-    def get(cls, connection: sqlite3.Connection, id: int) -> Self:
-        row = connection.execute("SELECT * FROM user WHERE id=?;", (id,)).fetchone()
-        if row is None:
-            raise ValueError("User not found")
-        return cls(**row)
-
-    @classmethod
-    def list(cls, connection: sqlite3.Connection) -> list[Self]:
-        return [
-            cls(**row) for row in connection.execute("SELECT * FROM user;").fetchall()
-        ]
-
-    @classmethod
-    def login(cls, connection: sqlite3.Connection, name: str, password: str) -> Self:
-        row = connection.execute("SELECT * FROM user WHERE name=?;", (name,)).fetchone()
+    def login(cls, name: str, password: str) -> Self:
+        row = cls.database.queryone("SELECT * FROM user WHERE name=?;", (name,))
         if row is None:
             raise ValueError("User not found")
         if not hasher.verify(row["password_hash"], password):
@@ -128,8 +170,17 @@ class User:
         return cls(**row)
 
 
-@dataclass
-class Call:
+class Call(Table):
+    CREATE: ClassVar[str] = """CREATE TABLE IF NOT EXISTS call(
+        id integer primary key autoincrement,
+        received_at datetime not null,
+        received_by_id integer not null,
+        number text,
+        caller text,
+        notes text,
+        created_at datetime not null,
+        updated_at datetime
+    )"""
     id: int
     received_at: datetime
     received_by_id: int
@@ -142,16 +193,25 @@ class Call:
     @classmethod
     def create(
         cls,
-        connection: sqlite3.Connection,
         received_at: datetime,
         received_by: User,
         number: str,
         caller: str,
         notes: str,
     ) -> Self:
-        with connection:
-            row = connection.execute(
-                "INSERT INTO call(received_at, received_by_id, number, caller, notes, created_at) VALUES (?,?,?,?,?,?) RETURNING *;",
+        return cls(
+            **cls.database.queryone(
+                """
+                INSERT INTO call(
+                    received_at,
+                    received_by_id,
+                    number,
+                    caller,
+                    notes,
+                    created_at
+                )
+                VALUES (?,?,?,?,?,?)
+                RETURNING *""",
                 (
                     received_at,
                     received_by.id,
@@ -160,27 +220,21 @@ class Call:
                     notes,
                     datetime.now(timezone.utc),
                 ),
-            ).fetchone()
-            call = cls(**row)
-            connection.commit()
-        return call
-
-    @classmethod
-    def list(cls, connection: sqlite3.Connection) -> list[Self]:
-        return [
-            cls(**row) for row in connection.execute("SELECT * FROM call;").fetchall()
-        ]
-
-    @classmethod
-    def get(cls, connection: sqlite3.Connection, id: int) -> Self:
-        row = connection.execute("SELECT * FROM call WHERE id=?;", (id,)).fetchone()
-        if row is None:
-            raise ValueError("Call not found")
-        return cls(**row)
+            )
+        )
 
 
-@dataclass
-class Task:
+class Task(Table):
+    CREATE: ClassVar[str] = """CREATE TABLE IF NOT EXISTS task(
+        id integer primary key autoincrement,
+        user_id integer not null,
+        call_id integer,
+        name text not null,
+        notes text,
+        created_at datetime not null,
+        updated_at datetime,
+        completed_at datetime
+    )"""
     id: int
     user_id: int
     call_id: int | None
@@ -193,14 +247,13 @@ class Task:
     @classmethod
     def create(
         cls,
-        connection: sqlite3.Connection,
         user: User,
         call: Call | None,
         name: str,
         notes: str,
     ) -> Self:
-        with connection:
-            row = connection.execute(
+        return cls(
+            **cls.database.queryone(
                 "INSERT INTO task(user_id, call_id, name, notes, created_at) VALUES (?,?,?,?,?) RETURNING *;",
                 (
                     user.id,
@@ -209,16 +262,8 @@ class Task:
                     notes,
                     datetime.now(timezone.utc).isoformat(),
                 ),
-            ).fetchone()
-            task = cls(**row)
-            connection.commit()
-        return task
-
-    @classmethod
-    def list(cls, connection: sqlite3.Connection) -> list[Self]:
-        return [
-            cls(**row) for row in connection.execute("SELECT * FROM task;").fetchall()
-        ]
+            )
+        )
 
 
 def create_token(user: User, dur: timedelta, secret: str) -> str:
