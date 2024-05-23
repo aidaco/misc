@@ -40,29 +40,6 @@ class TableMeta(type):
     def set_database(cls, database: "Database") -> None:
         cls.database = database
 
-    def get[T: "TableMeta"](self: type[T], id: int) -> T:
-        return self(
-            **self.database.queryone(f"SELECT * FROM {self.NAME} WHERE id=?", (id,))
-        )
-
-    def all[T: "TableMeta"](self: type[T]) -> Iterator[T]:
-        yield from (
-            self(**row) for row in self.database.query(f"SELECT * FROM {self.NAME}")
-        )
-
-    def where[T: "TableMeta"](self: type[T], *predicates, **values) -> Iterator[T]:
-        predicates = [
-            *predicates,
-            *(f"{column}=?" for column in values),
-        ]
-        yield from (
-            self(**row)
-            for row in self.database.query(
-                f"SELECT * FROM {self.NAME} WHERE {" AND ".join(predicates)}",
-                tuple(values.values()),
-            )
-        )
-
 
 @dataclass
 class Database:
@@ -118,7 +95,32 @@ class Database:
         return table_cls
 
 
-class Table(metaclass=TableMeta): ...
+class Table(metaclass=TableMeta):
+    @classmethod
+    def get(cls, id: int) -> Self:
+        return cls(
+            **cls.database.queryone(f"SELECT * FROM {cls.NAME} WHERE id=?", (id,))
+        )
+
+    @classmethod
+    def all(cls) -> Iterator[Self]:
+        yield from (
+            cls(**row) for row in cls.database.query(f"SELECT * FROM {cls.NAME}")
+        )
+
+    @classmethod
+    def where(cls, *predicates, **values) -> Iterator[Self]:
+        predicates = [
+            *predicates,
+            *(f"{column}=?" for column in values),
+        ]
+        yield from (
+            cls(**row)
+            for row in cls.database.query(
+                f"SELECT * FROM {cls.NAME} WHERE {" AND ".join(predicates)}",
+                tuple(values.values()),
+            )
+        )
 
 
 CLOSE_CONFIG = """
@@ -163,10 +165,8 @@ class User(Table):
     @classmethod
     def login(cls, name: str, password: str) -> Self:
         row = cls.database.queryone("SELECT * FROM user WHERE name=?;", (name,))
-        if row is None:
-            raise ValueError("User not found")
-        if not hasher.verify(row["password_hash"], password):
-            raise ValueError("Invalid password")
+        if row is None or not verify_password(password, row["password_hash"]):
+            raise ValueError("Login failed.")
         return cls(**row)
 
 
@@ -266,6 +266,14 @@ class Task(Table):
         )
 
 
+def hash_password(password: str) -> str:
+    return hasher.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return hasher.verify(password_hash, password)
+
+
 def create_token(user: User, dur: timedelta, secret: str) -> str:
     return jwt.encode(
         {"user_id": user.id, "exp": datetime.now(timezone.utc) + dur},
@@ -274,10 +282,10 @@ def create_token(user: User, dur: timedelta, secret: str) -> str:
     )
 
 
-def verify_token(token: str, secret: str) -> User:
+def verify_token(token: str, secret: str) -> int:
     try:
         payload = jwt.decode(token, secret, algorithms=["HS256"])
-        return User.get(payload["user_id"])
+        return payload["user_id"]
     except jwt.DecodeError:
         raise ValueError("Invalid token")
 
@@ -615,7 +623,7 @@ class LoginRequired(Exception):
 def authenticated(token: Annotated[str | None, Cookie()] = None) -> User:
     try:
         assert token is not None
-        return verify_token(token, jwt_secret)
+        return User.get(verify_token(token, jwt_secret))
     except (ValueError, AssertionError):
         raise LoginRequired()
 
@@ -653,12 +661,9 @@ def post_login_page(
 
 @app.get("/", response_class=HTMLResponse)
 def get_homepage(_: Annotated[User, Depends(authenticated)]):
-    with database() as db:
-        calls = Call.list()
-        tasks = Task.list()
     return HOMEPAGE_HTML.render(
-        calls=calls,
-        tasks=tasks,
+        calls=Call.all(),
+        tasks=Task.all(),
     )
 
 
@@ -675,15 +680,13 @@ def post_create_call_form(
     notes: Annotated[str, Form()],
     user: Annotated[User, Depends(authenticated)],
 ):
-    call = Call.create(received_at.astimezone(), user, number, caller, notes)
+    Call.create(received_at.astimezone(), user, number, caller, notes)
     return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
 
 
 @app.get("/task/create", response_class=HTMLResponse)
 def get_create_task_form(user: Annotated[User, Depends(authenticated)]):
-    with database() as db:
-        calls = Call.list()
-    return CREATE_TASK_FORM_HTML.render(calls=calls)
+    return CREATE_TASK_FORM_HTML.render(calls=Call.all())
 
 
 @app.post("/task/create")
@@ -694,7 +697,7 @@ def post_create_task_form(
     call_id: Annotated[int | None, Form()] = None,
 ):
     call = Call.get(call_id) if call_id is not None else None
-    task = Task.create(user, call, name, notes)
+    Task.create(user, call, name, notes)
     return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
 
 
