@@ -24,3 +24,9 @@ misc = 'misc.cli:cli'
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = 'py312'
+
+[tool.pyright]
+pythonVersion = '3.12'

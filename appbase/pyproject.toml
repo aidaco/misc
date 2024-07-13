@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "appbase"
+version = "0.0.1-dev"
+description = "AppBase"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE.txt"}
+keywords = ["AppBase"]
+authors = [
+  {name = "Aidan Courtney", email = "contact@aidan.software" }
+]
+
+[project.optional-dependencies]
+base = [ "rich", "appdirs", "toml", "pydantic", "yaml" ]
+api = [ "fastapi", "uvicorn" ]
+cli = [ "cyclopts" ]
+web = [ "requests", "python-multipart" ]
+security = [ "PyJWT", "argon2-cffi", "pywebpush", "py_vapid" ]
+database = [ "pysqlite3-binary" ]
+dev = ["pre-commit", "pyright", "ruff", "mypy", "types-requests", "types-toml"]
+test = ["pytest", "coverage"]
+all = ["appbase[base,api,cli,web,security,database]"]
+_all = ["appbase[all,test,dev]"]
+
+[project.urls]
+"Source" = "https://github.com/aidaco/misc/appbase"
+
+[tool.ruff]
+target-version = 'py312'
+
+[tool.pyright]
+pythonVersion = '3.12'
