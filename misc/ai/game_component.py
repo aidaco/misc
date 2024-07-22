@@ -56,29 +56,33 @@ def show_tasks():
         yield
 
 
-def DEFAULT_MESSAGES():
-    type = random.choice(
-        "characters,items,abilities,weapons,entities,enemies,buildings,historical events".split(
-            ","
-        )
-    )
+DEFAULT_TYPES = "characters,items,abilities,weapons,entities,enemies,buildings,historical events".split(
+    ","
+)
+
+FORMAT = '{"type": "...", "name": "...", "description": "...", "image": "..."}'
+
+
+def DEFAULT_MESSAGES(content_types=DEFAULT_TYPES, format=FORMAT):
+    type = random.choice(content_types)
     return [
         {
             "role": "system",
-            "content": """\
+            "content": f"""\
     You are a sophisticated creative writing assistant for video game content.\
-    Help us create some fun characters, items, abilities, weapons, entities, enemies, buildings, historical events, etc. \
+    Help us create some fun {content_types.join(', ')}. \
     For each creation, provide a type, name, description and an image generation prompt. \
-    Respond with JSON objects of the form {"type": "...", "name": "...", "description": "...", "image": "..."}.\
+    Respond with JSON objects of the form {format}.\
     """,
         },
         {
             "role": "user",
             "content": """\
-    We're creating a location based cooperative multiplayer game. \
-    In this game players collaborate to push back the darkness. \
-    The tone of the game is dark but lighthearted.\
-    The game features a simple web-based interface. \
+    We're creating a location based multiplayer game. \
+    In this game players are stranded on rafts on a majority water planet. \
+    Players interact (collaboratively and competitively) while exploring. \
+    The tone of the game is dark but lighthearted. \
+    The game features a simple web-based interface, with pixel-art style graphics. \
     Create an entity.\
      """,
         },
