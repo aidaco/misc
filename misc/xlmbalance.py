@@ -36,10 +36,15 @@ def ratelimiter(rate: float = 1.0, sync: int = 1):
     return ratelimit
 
 
+class HorizonException(Exception): ...
+
+
 async def hzn_req(session, ratelimit, endpoint):
     HORIZON_URL = "https://horizon.stellar.org"
     async with ratelimit():
         async with session.get(HORIZON_URL + "/" + endpoint) as response:
+            if not response.ok:
+                raise HorizonException()
             return await response.json()
 
 
@@ -63,12 +68,15 @@ async def get_asset(session, ratelimit, code: str, issuer: str):
 
 
 async def calc_avg_xlm_price(session, ratelimit, asset: tuple):
-    native = ("native", "XLM", "")
-    trades = (await get_trades(session, ratelimit, native, asset))["_embedded"][
-        "records"
-    ]
-    prices = [int(t["price"]["n"]) / int(t["price"]["d"]) for t in trades]
-    return sum(prices) / len(prices)
+    try:
+        native = ("native", "XLM", "")
+        trades = (await get_trades(session, ratelimit, native, asset))["_embedded"][
+            "records"
+        ]
+        prices = [int(t["price"]["n"]) / int(t["price"]["d"]) for t in trades]
+        return sum(prices) / len(prices)
+    except HorizonException:
+        return 0
 
 
 async def parse_credit_balance(session, ratelimit, balance: dict):
