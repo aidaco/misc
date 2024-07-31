@@ -76,14 +76,15 @@ async def calc_avg_xlm_price(session, ratelimit, asset: tuple):
         prices = [int(t["price"]["n"]) / int(t["price"]["d"]) for t in trades]
         return sum(prices) / len(prices)
     except HorizonException:
-        return 1
+        return 0
 
 
 async def parse_credit_balance(session, ratelimit, balance: dict):
     asset = (balance["asset_type"], balance["asset_code"], balance["asset_issuer"])
     avg_price = await calc_avg_xlm_price(session, ratelimit, asset)
     amt = float(balance["balance"])
-    return f"{balance['asset_code']}", amt, amt / avg_price
+    value = amt / avg_price if avg_price > 0 else 0
+    return balance["asset_code"], amt, value
 
 
 async def parse_lp_balance(session, ratelimit, balance: dict):
