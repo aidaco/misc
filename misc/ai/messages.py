@@ -1,7 +1,5 @@
-from typing import Self, Literal, ClassVar, runtime_checkable, Protocol, Callable
+from typing import Literal, runtime_checkable, Protocol, Callable
 from dataclasses import dataclass
-import textwrap
-from pathlib import Path
 
 from rich import print
 from rich.console import Group
@@ -20,8 +18,7 @@ STYLES = {
 
 @runtime_checkable
 class Objectable(Protocol):
-    def object(self) -> dict:
-        ...
+    def object(self) -> dict: ...
 
 
 def objectify(inst):
@@ -39,7 +36,7 @@ class TextContentPart:
     text: str
 
     def object(self):
-        return {'type': 'text', 'text': self.text}
+        return {"type": "text", "text": self.text}
 
     def __rich__(self):
         return self.text
@@ -50,15 +47,10 @@ class ImageContentPart:
     url: str
 
     def object(self):
-        return {
-            'type': 'image_url',
-            'image_url': {
-                'url': self.url
-            }
-        }
+        return {"type": "image_url", "image_url": {"url": self.url}}
 
     def __rich__(self):
-        return f'[link={self.url}]{self.url}[/link]'
+        return f"[link={self.url}]{self.url}[/link]"
 
 
 type TextContent = str
@@ -73,12 +65,9 @@ class ToolCall:
 
     def object(self):
         return {
-            'id': self.id,
-            'type': 'function',
-            'function': {
-                'name': self.name,
-                'arguments': self.arguments
-            }
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
         }
 
 
@@ -88,10 +77,7 @@ class ChatMessage[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
     content: ContentType
 
     def object(self):
-        return {
-            'role': self.role,
-            'content': objectify(self.content)
-        }
+        return {"role": self.role, "content": objectify(self.content)}
 
     def __rich__(self):
         match self.content:
@@ -104,8 +90,9 @@ class ChatMessage[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
             title=self.role,
             title_align="left",
             style=STYLES[self.role],
-            border_style=STYLES['border'],
+            border_style=STYLES["border"],
         )
+
 
 @dataclass
 class ChatMessageToolCall[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
@@ -116,12 +103,12 @@ class ChatMessageToolCall[RoleType: str, ContentType: (TextContent, MultiModalCo
 
     def object(self):
         obj = {
-            'role': self.role,
-            'content': objectify(self.content),
+            "role": self.role,
+            "content": objectify(self.content),
         }
         if not self.tool_calls:
             return obj
-        return obj | {'tool_calls': [call.json() for call in self.tool_calls]}
+        return obj | {"tool_calls": [call.json() for call in self.tool_calls]}
 
     def __rich__(self):
         match self.content:
@@ -135,11 +122,15 @@ class ChatMessageToolCall[RoleType: str, ContentType: (TextContent, MultiModalCo
             title=self.role,
             title_align="left",
             style=STYLES[self.role],
-            border_style=STYLES['border'],
+            border_style=STYLES["border"],
         )
 
+
 @dataclass
-class ChatMessageToolResult[RoleType: str, ContentType: (TextContent, MultiModalContent)]:
+class ChatMessageToolResult[
+    RoleType: str,
+    ContentType: (TextContent, MultiModalContent),
+]:
     content: ContentType
     tool_call_id: str
     name: str
@@ -147,10 +138,10 @@ class ChatMessageToolResult[RoleType: str, ContentType: (TextContent, MultiModal
 
     def object(self):
         return {
-            'role': self.role,
-            'tool_call_id': self.tool_call_id,
-            'name': self.name,
-            'content': objecctify(self.content)
+            "role": self.role,
+            "tool_call_id": self.tool_call_id,
+            "name": self.name,
+            "content": objecctify(self.content),
         }
 
     def __rich__(self):
@@ -164,25 +155,24 @@ class ChatMessageToolResult[RoleType: str, ContentType: (TextContent, MultiModal
             title=self.role,
             title_align="left",
             style=STYLES[self.role],
-            border_style=STYLES['border'],
+            border_style=STYLES["border"],
         )
 
 
 type TextWithToolsChatMessage = (
-    ChatMessage[Literal['system', 'user', 'assistant'], TextContent] |
-    ChatMessageToolCall[Literal['assistant'], TextContent] |
-    ChatMessageToolResult[Literal['tool'], TextContent]
+    ChatMessage[Literal["system", "user", "assistant"], TextContent]
+    | ChatMessageToolCall[Literal["assistant"], TextContent]
+    | ChatMessageToolResult[Literal["tool"], TextContent]
 )
 type MultiModalWithToolsChatMessage = (
-    ChatMessage[Literal['system', 'user', 'assistant'], MultiModalContent] |
-    ChatMessageToolCall[Literal['assistant'], MultiModalContent] |
-    ChatMessageToolResult[Literal['tool'], MultiModalContent]
+    ChatMessage[Literal["system", "user", "assistant"], MultiModalContent]
+    | ChatMessageToolCall[Literal["assistant"], MultiModalContent]
+    | ChatMessageToolResult[Literal["tool"], MultiModalContent]
 )
 
 
 class MessageProvider[MessageType](Protocol):
-    def provide(self, role: str, messages: list[MessageType]) -> list[MessageType]:
-        ...
+    def provide(self, role: str, messages: list[MessageType]) -> list[MessageType]: ...
 
 
 @dataclass
@@ -195,13 +185,13 @@ class Messages[MessageType]:
 
     def notify(self, fn: Callable[[MessageType], None]):
         self.watchers.append(fn)
-    
+
     def post(self, message: MessageType):
         self.messages.append(message)
         for fn in self.watchers:
             fn(message)
         match message.content:
-            case '':
+            case "":
                 return
             case None:
                 return
@@ -210,12 +200,9 @@ class Messages[MessageType]:
 
 
 def parse(cls, obj):
-    if hasattr(obj, 'model_dump'):
+    if hasattr(obj, "model_dump"):
         obj = obj.model_dump()
-    return TypeAdapter(
-        cls,
-        config={'extra': 'forbid'}
-    ).validate_python(obj)
+    return TypeAdapter(cls, config={"extra": "forbid"}).validate_python(obj)
 
 
 def construct(cls, **properties):

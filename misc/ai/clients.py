@@ -1,21 +1,21 @@
 from pathlib import Path
 from time import time_ns
 from urllib.request import urlopen
-from typing import Literal, Protocol, Callable
-from dataclasses import dataclass
-import json
+from typing import Literal
 
 import openai
 
-from .messages import Message, TextChatMessage, MultiModalChatMessage
-
+# from .messages import TextChatMessage, MultiModalChatMessage
 
 
 class OpenAIClient:
     def __init__(
         self,
         client: openai.OpenAI | None = None,
-        chat_model: Literal['gpt-4-1106-preview', 'gpt-4-vision-preview'] = 'gpt-4-vision-preview',
+        chat_model: Literal[
+            "gpt-4-1106-preview", "gpt-4-vision-preview"
+        ] = "gpt-4-vision-preview",
+        image_model: str = "dalle-3",
         image_output_dir: Path = Path.cwd(),
         max_tokens: int = 4096,
     ):
@@ -25,16 +25,14 @@ class OpenAIClient:
         self.image_output_dir = image_output_dir
         self.max_tokens = max_tokens
 
-
     def generate_image(
         self,
         prompt: str,
-        size: Literal['1024x1024', '1792x1024', '1024x1792'] = '1792x1024',
-        quality: Literal['standard', 'hd'] = 'hd',
-        style: Literal['vivid', 'natural'] = 'vivid',
+        size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024",
+        quality: Literal["standard", "hd"] = "hd",
+        style: Literal["vivid", "natural"] = "vivid",
     ):
-
-        tag = f'{time_ns():x}'
+        tag = f"{time_ns():x}"
         parameters = dict(
             model=self.image_model,
             prompt=prompt,
@@ -42,19 +40,16 @@ class OpenAIClient:
             quality=quality,
         )
 
-        url = self.client.images.generate(
-            **parameters,
-            n=1
-        ).data[0].url
-        img_path = self.image_output_dir / f'{tag}.png'
-        with urlopen(url) as remote, img_path.open('wb') as local:
+        url = self.client.images.generate(**parameters, n=1).data[0].url
+        img_path = self.image_output_dir / f"{tag}.png"
+        with urlopen(url) as remote, img_path.open("wb") as local:
             local.write(remote.read())
-        with (self.image_output_dir/f'{tag}.txt').open('w') as prompt_store:
-            prompt_store.writelines([
-                '{',
-                *(
-                    '\t'f"'{k}': '{v}'" for k, v in parameters.items()
-                ),
-                '}',
-            ])
+        with (self.image_output_dir / f"{tag}.txt").open("w") as prompt_store:
+            prompt_store.writelines(
+                [
+                    "{",
+                    *("\t" f"'{k}': '{v}'" for k, v in parameters.items()),
+                    "}",
+                ]
+            )
         return img_path

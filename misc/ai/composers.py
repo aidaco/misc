@@ -1,56 +1,63 @@
 import re
 import base64
 import textwrap
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from twidge.widgets import Close, EditString, Framed
 
-from .messages import TextChatMessage, MultiModalChatMessage, ChatMessage, TextContent, MultiModalContent, TextContentPart, ImageContentPart, STYLES
+from .messages import (
+    TextWithToolsChatMessage,
+    MultiModalWithToolsChatMessage,
+    ChatMessage,
+    TextContent,
+    MultiModalContent,
+    TextContentPart,
+    ImageContentPart,
+    STYLES,
+)
 
 
 class ComposeText:
-    def provide(self, role: str, messages: list[TextChatMessage]) -> TextChatMessage:
+    def provide(
+        self, role: str, messages: list[TextWithToolsChatMessage]
+    ) -> TextWithToolsChatMessage:
         text = Close(
             Framed(
-                EditString(
-                    '', text_style=STYLES[role], cursor_line_style=STYLES[role]
-                ),
+                EditString("", text_style=STYLES[role], cursor_line_style=STYLES[role]),
                 title=role,
                 title_align="left",
-                style=STYLES['editor_border'],
+                style=STYLES["editor_border"],
             )
         ).run()
         return [ChatMessage(role, text)]
 
 
 class ComposeMultiModal:
-    def provide(self, role: str, messages: list[MultiModalChatMessage]) -> MultiModalChatMessage:
+    def provide(
+        self, role: str, messages: list[MultiModalWithToolsChatMessage]
+    ) -> MultiModalWithToolsChatMessage:
         text = Close(
             Framed(
-                EditString(
-                    '', text_style=STYLES[role], cursor_line_style=STYLES[role]
-                ),
+                EditString("", text_style=STYLES[role], cursor_line_style=STYLES[role]),
                 title=role,
                 title_align="left",
-                style=STYLES['editor_border'],
+                style=STYLES["editor_border"],
             )
         ).run()
         content = extract_urls(text)
         return [ChatMessage(role, content)]
 
 
-def extract_urls(content: TextContent | MultiModalContent) -> TextContent | MultiModalContent:
+def extract_urls(
+    content: TextContent | MultiModalContent,
+) -> TextContent | MultiModalContent:
     match content:
         case str():
             text, urls = _extract_image_urls(content)
             if not urls:
                 return text
-            return [
-                TextContentPart(text),
-                *(ImageContentPart(url) for url in urls)
-            ]
+            return [TextContentPart(text), *(ImageContentPart(url) for url in urls)]
         case list():
             parts = []
             for part in content:
@@ -65,7 +72,7 @@ def extract_urls(content: TextContent | MultiModalContent) -> TextContent | Mult
                     case ImageContentPart():
                         parts.extend(part)
             return parts
-    
+
 
 URL_REGEX = re.compile(
     r"""
@@ -103,11 +110,7 @@ def _extract_image_urls(text, url_pattern=URL_REGEX, path_pattern=PATH_REGEX):
     paths, cleaned = _extract_matches(path_pattern, no_urls)
     if not urls and not paths:
         return text.strip(), None
-    urls.extend(
-        _base64url(p.open("rb"))
-        for p in map(Path, paths)
-        if p.exists()
-    )
+    urls.extend(_base64url(p.open("rb")) for p in map(Path, paths) if p.exists())
     return cleaned.strip(), urls
 
 
@@ -134,8 +137,6 @@ def _get_item_or_attr(obj, name, default=None):
             return getattr(obj, name)
         except AttributeError:
             return default
-
-
 
 
 @pytest.mark.parametrize(

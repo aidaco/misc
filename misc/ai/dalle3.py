@@ -1,11 +1,13 @@
-import sys
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self, Iterator
 from time import time_ns
 from datetime import datetime
 import json
 import urllib.request
+from dataclasses import dataclass, field, asdict
+import copy
 
+from pydantic import BaseModel
 from typer import Typer
 from openai import OpenAI
 
@@ -16,107 +18,91 @@ client = OpenAI(api_key=key)
 OUTDIR = Path("results")
 
 
-def generate_image(
-    prompt: str,
-    output_dir: Path,
-    output_tag: str | None = None,
-    model: Literal["dall-e-3", "dall-e-2"] = "dall-e-3",
-    size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024",
-    quality: Literal["standard", "hd"] = "hd",
-    style: Literal["vivid", "natural"] = "vivid",
-):
-    tag = output_tag if output_tag is not None else f"{time_ns():x}"
-    parameters = dict(
-        model=model,
-        prompt=prompt,
-        size=size,
-        quality=quality,
-    )
-
-    url = client.images.generate(**parameters, n=1).data[0].url
-    with urllib.request.urlopen(url) as remote:
-        with (output_dir / f"{tag}.png").open("wb") as local:
-            local.write(remote.read())
+class Prompt(BaseModel):
+    prompt: str
+    model: Literal["dall-e-3"] = "dall-e-3"
+    size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024"
+    quality: Literal["standard", "hd"] = "hd"
+    style: Literal["vivid", "natural"] = "vivid"
 
 
-def update_metadata(
-    prompt: str,
-    output_dir: Path,
-    output_tag: str | None = None,
-    model: Literal["dall-e-3", "dall-e-2"] = "dall-e-3",
-    size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024",
-    quality: Literal["standard", "hd"] = "hd",
-):
-    tag = output_tag if output_tag is not None else f"{time_ns():x}"
-    parameters = dict(
-        model=model,
-        prompt=prompt,
-        size=size,
-        quality=quality,
-    )
-    with (output_dir / f"{tag}.txt").open("w") as prompt_store:
-        prompt_store.writelines(
-            [
-                "{",
-                *("\t" f"'{k}': '{v}'" for k, v in parameters.items()),
-                "}",
-            ]
+class Prompts(BaseModel):
+    prompts: list[Prompt]
+
+
+VARIATIONS_PROMPT = """
+You are a helpful assistant that generates, optimizes, and improves prompts for AI image generation models. Prompts must be 100-200 words and highly detailed.
+Be Specific and Detailed: The more specific your prompt, the better the image quality. Include details like the setting, objects, colors, mood, and any specific elements you want in the image.
+Mood and Atmosphere: Describe the mood or atmosphere you want to convey. Words like “serene,” “chaotic,” “mystical,” or “futuristic” can guide the AI in setting the right tone.
+Use Descriptive Adjectives: Adjectives help in refining the image. For example, instead of saying “a dog,” say “a fluffy, small, brown dog.”
+Consider Perspective and Composition: Mention if you want a close-up, a wide shot, a bird’s-eye view, or a specific angle. This helps in framing the scene correctly.
+Specify Lighting and Time of Day: Lighting can dramatically change the mood of an image. Specify if it’s day or night, sunny or cloudy, or if there’s a specific light source like candlelight or neon lights.
+Incorporate Action or Movement: If you want a dynamic image, describe actions or movements. For instance, “a cat jumping over a fence” is more dynamic than just “a cat.”
+Avoid Overloading the Prompt: While details are good, too many can confuse the AI. Try to strike a balance between being descriptive and being concise.
+Use Analogies or Comparisons: Sometimes it helps to compare what you want with something well-known, like “in the style of Van Gogh” or “resembling a scene from a fantasy novel.”
+Specify Desired Styles or Themes: If you have a particular artistic style or theme in mind, mention it. For example, “cyberpunk,” “art deco,” or “minimalist.”
+Iterative Approach: Sometimes, you may not get the perfect image on the first try. Use the results to refine your prompt and try again.
+"""
+
+
+@dataclass
+class Parameters:
+    prompt: str
+    model: Literal["dall-e-3"] = "dall-e-3"
+    size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024"
+    quality: Literal["standard", "hd"] = "hd"
+    style: Literal["vivid", "natural"] = "vivid"
+
+    def variations(self, n: int = 5) -> Iterator[Self]:
+        response = (
+            client.beta.chat.completions.parse(
+                model="gpt-4o-2024-08-06",
+                messages=[
+                    {"role": "system", "content": VARIATIONS_PROMPT},
+                    {
+                        "role": "user",
+                        "content": f"Produce {n} variations of this prompt: {self}",
+                    },
+                ],
+                response_format=Prompts,
+            )
+            .choices[0]
+            .message
         )
 
+        if response.refusal:
+            raise ValueError(f"Refusal: {response.refusal}")
 
-def find_strs(o):
-    match o:
-        case str():
-            yield o
-        case dict():
-            for v in o.values():
-                yield from find_strs(v)
-        case list():
-            for e in o:
-                yield from find_strs(e)
-        case _:
-            print(f"unable to process {o}")
+        for prompt in response.parsed.prompts:
+            yield Parameters(**prompt.model_dump())
 
 
-def generate_variations(prompt: str) -> list[str]:
-    response = (
-        client.chat.completions.create(
-            model="gpt-4-1106-preview",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a helpful assistant that generates more optimized and intricately detailed suggestions for prompts to be given to an AI image generation model. Please responde only with a JSON object with a 'suggested_prompts' key holding an array with 5 suggested prompts of 100 to 200 words.",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            n=1,
-            response_format={"type": "json_object"},
-        )
-        .choices[0]
-        .message.content
-    )
+@dataclass
+class ImageGen:
+    batch: list[Parameters]
+    output_dir: Path = field(default_factory=Path.cwd)
+    output_tag: str = field(default_factory=lambda: f"{time_ns():x}")
 
-    return [s for s in find_strs(json.loads(response)) if moderate_prompt(s)]
+    def moderate(self) -> bool:
+        response = client.moderations.create(input="prompt").results[0]
+        return not response.flagged
 
+    def generate(self):
+        for i, params in enumerate(self.batch):
+            url = client.images.generate(**asdict(params)).data[0].url
+            with urllib.request.urlopen(url) as remote:
+                with (self.output_dir / f"{self.output_tag}-{i}.png").open(
+                    "wb"
+                ) as local:
+                    local.write(remote.read())
 
-def moderate_prompt(prompt: str) -> bool:
-    response = client.moderations.create(input="Sample text goes here.").results[0]
-    return not response.flagged
+    def update_metadata(self):
+        with (self.output_dir / f"{self.output_tag}.txt").open("a") as metafd:
+            for params in self.batch:
+                metafd.write(json.dumps(asdict(params)) + "\n")
 
-
-def generate_image_variations(prompt: str):
-    if not moderate_prompt(prompt):
-        raise ValueError("bad prompt")
-    tag = f"{datetime.now():%Y-%m-%d %H-%M-%S}"
-    print(f"TAG: {tag}")
-
-    prompts = [prompt, *generate_variations(prompt)]
-
-    prompt_dir = OUTDIR / tag
-    prompt_dir.mkdir(parents=True, exist_ok=False)
-    for p in prompts:
-        generate_image(p, prompt_dir)
-        print('"', p, '"')
+    def variations(self, index: int = 0, n: int = 5) -> None:
+        self.batch.extend(self.batch[index].variations(n))
 
 
 cli = Typer()
@@ -124,15 +110,21 @@ cli = Typer()
 
 @cli.command()
 def single(prompt: str):
-    generate_image(
-        prompt=prompt,
-        output_dir=Path.cwd(),
-    )
+    gen = ImageGen([Parameters(prompt)])
+    if not gen.moderate():
+        raise ValueError("bad prompt")
+    gen.generate()
+    gen.update_metadata()
 
 
 @cli.command()
 def variations(prompt: str):
-    generate_image_variations(prompt)
+    gen = ImageGen([Parameters(prompt)])
+    if not gen.moderate():
+        raise ValueError("bad prompt")
+    gen.variations()
+    gen.generate()
+    gen.update_metadata()
 
 
 if __name__ == "__main__":
