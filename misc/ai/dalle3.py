@@ -1,11 +1,10 @@
 from pathlib import Path
 from typing import Literal, Self, Iterator
 from time import time_ns
-from datetime import datetime
 import json
 import urllib.request
+from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
-import copy
 
 from pydantic import BaseModel
 from typer import Typer
@@ -18,7 +17,7 @@ client = OpenAI(api_key=key)
 OUTDIR = Path("results")
 
 
-class Prompt(BaseModel):
+class PromptModel(BaseModel):
     prompt: str
     model: Literal["dall-e-3"] = "dall-e-3"
     size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024"
@@ -26,8 +25,8 @@ class Prompt(BaseModel):
     style: Literal["vivid", "natural"] = "vivid"
 
 
-class Prompts(BaseModel):
-    prompts: list[Prompt]
+class PromptListModel(BaseModel):
+    prompts: list[PromptModel]
 
 
 VARIATIONS_PROMPT = """
@@ -46,7 +45,7 @@ Iterative Approach: Sometimes, you may not get the perfect image on the first tr
 
 
 @dataclass
-class Parameters:
+class Prompt:
     prompt: str
     model: Literal["dall-e-3"] = "dall-e-3"
     size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1792x1024"
@@ -64,7 +63,7 @@ class Parameters:
                         "content": f"Produce {n} variations of this prompt: {self}",
                     },
                 ],
-                response_format=Prompts,
+                response_format=PromptListModel,
             )
             .choices[0]
             .message
@@ -74,30 +73,32 @@ class Parameters:
             raise ValueError(f"Refusal: {response.refusal}")
 
         for prompt in response.parsed.prompts:
-            yield Parameters(**prompt.model_dump())
+            yield Prompt(**prompt.model_dump())
 
 
 @dataclass
 class ImageGen:
-    batch: list[Parameters]
+    batch: list[Prompt]
+    tag: str = field(default_factory=lambda: f"{time_ns():x}")
     output_dir: Path = field(default_factory=Path.cwd)
-    output_tag: str = field(default_factory=lambda: f"{time_ns():x}")
-
-    def moderate(self) -> bool:
-        response = client.moderations.create(input="prompt").results[0]
-        return not response.flagged
 
     def generate(self):
+        self.moderate()
         for i, params in enumerate(self.batch):
             url = client.images.generate(**asdict(params)).data[0].url
             with urllib.request.urlopen(url) as remote:
-                with (self.output_dir / f"{self.output_tag}-{i}.png").open(
-                    "wb"
-                ) as local:
+                with (self.output_dir / f"{self.tag}-{i}.png").open("wb") as local:
                     local.write(remote.read())
+        self.update_metadata()
+
+    def moderate(self) -> None:
+        submission = json.dumps([asdict(prompt) for prompt in self.batch])
+        response = client.moderations.create(input=submission).results[0]
+        if response.flagged:
+            raise ValueError(f"Bad prompt: {self.batch}")
 
     def update_metadata(self):
-        with (self.output_dir / f"{self.output_tag}.txt").open("a") as metafd:
+        with (self.output_dir / f"{self.tag}.txt").open("a") as metafd:
             for params in self.batch:
                 metafd.write(json.dumps(asdict(params)) + "\n")
 
@@ -109,22 +110,14 @@ cli = Typer()
 
 
 @cli.command()
-def single(prompt: str):
-    gen = ImageGen([Parameters(prompt)])
-    if not gen.moderate():
-        raise ValueError("bad prompt")
-    gen.generate()
-    gen.update_metadata()
+def prompt(prompt: str):
+    ImageGen([Prompt(prompt)]).generate()
 
 
 @cli.command()
-def variations(prompt: str):
-    gen = ImageGen([Parameters(prompt)])
-    if not gen.moderate():
-        raise ValueError("bad prompt")
-    gen.variations()
-    gen.generate()
-    gen.update_metadata()
+def auto(base: str, n: int = 5):
+    prompts = list(Prompt(base).variations(n))
+    ImageGen(prompts).generate()
 
 
 if __name__ == "__main__":
