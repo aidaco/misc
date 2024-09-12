@@ -6,7 +6,7 @@ from rich.live import Live
 from pydantic import BaseModel
 from getch import getch
 
-from wg.gen import Gen
+from misc.ai.chat import Chat
 
 
 class Object(BaseModel):
@@ -87,9 +87,9 @@ class TreeMap(BaseModel):
     locations: list[TreeLocation]
 
 
-def new_root(gen: Gen, world_prompt: str, root_prompt: str) -> GraphLocationNode:
+def new_root(chat: Chat, world_prompt: str, root_prompt: str) -> GraphLocationNode:
     prompt = f"{world_prompt}\n{root_prompt}"
-    return gen.user(prompt).gen(GraphLocationLeaf).asnode()
+    return chat.user(prompt).model(GraphLocationLeaf).asnode()
 
 
 @dataclass
@@ -117,14 +117,14 @@ class LocationDisplay:
 
 
 def expand_to_exit(
-    gen: Gen,
+    chat: Chat,
     root: GraphLocationNode,
     node: GraphLocationNode,
     exit: Exit,
     leaf_prompt: str,
 ) -> GraphLocationNode:
     prompt = f"The current map is: {root}. The current node is: {node.name}. The current exit is: {exit}. {leaf_prompt}"
-    leaf = gen.user(prompt).gen(GraphLocationLeaf).asnode()
+    leaf = chat.user(prompt).model(GraphLocationLeaf).asnode()
     ix = node.exits.index(exit)
     node.exits[ix] = ConnectedExit(description=exit.description, to=leaf)
     return leaf
@@ -136,8 +136,8 @@ def explore(
     leaf_prompt: str = "Generate the location that is connected to the current node by the current exit.",
     system_prompt: str = "We are creating a detailed game world in the style of the Fallout series set in a post-apocalyptic version of New York City.",
 ) -> None:
-    gen = Gen().system(system_prompt)
-    root = new_root(gen, world_prompt, root_prompt)
+    chat = Chat().system(system_prompt)
+    root = new_root(chat, world_prompt, root_prompt)
     current = root
     widget = LocationDisplay(current)
     console = Console()
@@ -150,7 +150,7 @@ def explore(
                         widget.select_next()
                     case " ":
                         current = expand_to_exit(
-                            gen, root, current, widget.selected, leaf_prompt
+                            chat, root, current, widget.selected, leaf_prompt
                         )
                         widget.update(current)
                     case "q":

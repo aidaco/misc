@@ -4,7 +4,7 @@ from typing import Iterator, Literal, Self
 
 from pydantic import BaseModel
 
-from wg.gen import Gen
+from misc.ai.chat import Chat
 
 
 class Location(BaseModel):
@@ -97,18 +97,18 @@ class State(BaseModel):
 def stateful(
     prompt: str = "We are creating a detailed haunted mansion murder mystery game set in the style of the Fallout series set in a post-apocalyptic version of the Hamptons.",
 ):
-    gen = Gen().system(
+    chat = Chat(inplace=False).system(
         "You are the dungeon master of a TTRPG-like text-based adventure game."
     )
-    game = gen.user(
+    game = chat.user(
         f"{prompt}\nGenerate a high-level description of the setting & plot."
-    ).gen(State)
+    ).model(State)
 
     history = []
 
     try:
         while True:
-            prompt = gen.user(
+            prompt = chat.user(
                 f"The conversation history is {history}.\n"
                 f"The game state is {game}.\n"
                 "Prompt the user for an open-ended action."
@@ -123,7 +123,7 @@ def stateful(
 
             with UpdateBase.use_state(game):
                 results = (
-                    gen.user(
+                    chat.user(
                         f"The conversation history is {history}.\n"
                         f"The game state is {game}.\n"
                         f"The user's action is '{action}'.\n"
