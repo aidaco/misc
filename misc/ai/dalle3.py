@@ -5,6 +5,7 @@ import json
 import urllib.request
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
+import io
 
 from pydantic import BaseModel
 from typer import Typer
@@ -76,18 +77,14 @@ class Image:
     prompt: Prompt
 
     @classmethod
-    def new(
-        cls, tag: str | None = None, dir: Path | None = None, **prompt_kwargs
-    ) -> Self:
-        kwargs = dict(prompt=Prompt(**prompt_kwargs))
-        if dir:
-            kwargs["dir"] = dir
-        if tag:
-            kwargs["tag"] = tag
-        return cls(**kwargs)
+    def new(cls, **prompt_kwargs) -> Self:
+        return cls(prompt=Prompt(**prompt_kwargs))
 
-    def generate(self, file: BinaryIO) -> None:
+    def generate(self, file: BinaryIO | None = None) -> BinaryIO:
+        if file is None:
+            file = io.BytesIO()
         prompt.generate(client, file)
+        return file
 
     def save(self, path: Path | None = None) -> Path:
         if path is None:

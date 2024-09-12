@@ -1,43 +1,44 @@
+from typing import Iterator
 import os
 import io
 
 from openai import OpenAI
+from pydantic import BaseModel
 import requests
 from PIL import Image
 
 from misc.ai.chat import Chat
+from misc.ai.dalle3 import Image as ImageGen
 
 openai = OpenAI()
-chat = Chat(client=openai)
+chat = Chat(client=openai).system("You are an expert graphic design assitant.")
 output_directory = "output"
-num_prompts = 5
 convert_svg = True
 
 # Ensure the output directory exists
 os.makedirs(output_directory, exist_ok=True)
 
 
-def generate_sticker_prompts():
-    return (
-        chat.system("You are an expert graphic design assitant.")
-        .user(
-            "Generate a creative idea for a specifid sticker design of at least 5 sentences."
+class StickerDesignModel(BaseModel):
+    design: str
+
+
+class StickerListModel(BaseModel):
+    stickers: list[StickerDesignModel]
+
+
+def generate_stickers(n: int = 5) -> Iterator[ImageGen]:
+    for sticker in (
+        chat.user(
+            f"Generate {n} creative ideas for specific sticker designs of at least 5 sentences."
         )
-        .text()
-    )
+        .model(StickerListModel)
+        .stickers
+    ):
+        yield ImageGen.new(prompt=sticker.design)
 
 
-def generate_image(prompt):
-    response = openai.images.generate(
-        model="dall-e-3", prompt=prompt, quality="hd", n=1, size="1024x1024"
-    )
-    url = response.data[0].url
-    assert url is not None
-    image_data = requests.get(url).content
-    return Image.open(io.BytesIO(image_data))
-
-
-def remove_background(image):
+def remove_background(image: Image.Image) -> Image.Image:
     output = io.BytesIO()
     image.save(output, format="PNG")
     response = requests.post(
@@ -50,9 +51,10 @@ def remove_background(image):
         return Image.open(io.BytesIO(response.content))
     else:
         response.raise_for_status()
+        raise Exception()
 
 
-def convert_to_svg(image):
+def convert_to_svg(image: Image.Image) -> bytes:
     import cairosvg
 
     output = io.BytesIO()
@@ -62,7 +64,7 @@ def convert_to_svg(image):
     return svg_data
 
 
-def save_image(image, prompt, idx):
+def save_image(image: Image.Image, prompt, idx):
     base_filename = os.path.join(output_directory, f"sticker_{idx}")
     png_path = f"{base_filename}.png"
     image.save(png_path)
@@ -74,13 +76,13 @@ def save_image(image, prompt, idx):
             svg_file.write(svg_data)
 
 
-def main():
-    prompts = generate_sticker_prompts(num_prompts)
-    for idx, prompt in enumerate(prompts):
-        print(f"Generating image for prompt: {prompt}")
-        image = generate_image(prompt)
+def main(n: int = 5):
+    images = generate_stickers(n)
+    for idx, imagegen in enumerate(images):
+        image = Image.open(imagegen.generate())
         image_no_bg = remove_background(image)
-        save_image(image_no_bg, prompt, idx)
+        save_image(image_no_bg, imagegen.prompt, idx)
+        print(imagegen.prompt)
 
 
 if __name__ == "__main__":
