@@ -10,9 +10,12 @@ from pydantic import BaseModel
 from typer import Typer
 from openai import OpenAI
 
+from misc.ai.chat import Chat
+
 
 key = open("/home/tuesday/documents/Secrets/openai-api-key").read().strip()
 client = OpenAI(api_key=key)
+chat = Chat.new(client=client)
 
 OUTDIR = Path("results")
 
@@ -54,56 +57,57 @@ class Prompt:
 
     def variations(self, n: int = 5) -> Iterator[Self]:
         response = (
-            client.beta.chat.completions.parse(
-                model="gpt-4o-2024-08-06",
-                messages=[
-                    {"role": "system", "content": VARIATIONS_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f"Produce {n} variations of this prompt: {self}",
-                    },
-                ],
-                response_format=PromptListModel,
-            )
-            .choices[0]
-            .message
+            chat.system(VARIATIONS_PROMPT)
+            .user(f"Produce {n} variations of this prompt: {self}")
+            .model(PromptListModel)
         )
 
-        if response.refusal:
-            raise ValueError(f"Refusal: {response.refusal}")
-
-        for prompt in response.parsed.prompts:
+        for prompt in response.prompts:
             yield Prompt(**prompt.model_dump())
+
+    def generate(self, client: OpenAI, path: Path) -> None:
+        url = client.images.generate(**asdict(self)).data[0].url
+        with urllib.request.urlopen(url) as remote:
+            with path.open("wb") as local:
+                local.write(remote.read())
 
 
 @dataclass
-class ImageGen:
+class Images:
     batch: list[Prompt]
     tag: str = field(default_factory=lambda: f"{time_ns():x}")
-    output_dir: Path = field(default_factory=Path.cwd)
+    dir: Path = field(default_factory=Path.cwd)
+
+    @classmethod
+    def new(
+        cls, tag: str | None = None, dir: Path | None = None, **prompt_kwargs
+    ) -> Self:
+        kwargs = dict(batch=[Prompt(**prompt_kwargs)])
+        if dir:
+            kwargs["dir"] = dir
+        if tag:
+            kwargs["tag"] = tag
+        return cls(**kwargs)
 
     def generate(self):
         self.moderate()
-        for i, params in enumerate(self.batch):
-            url = client.images.generate(**asdict(params)).data[0].url
-            with urllib.request.urlopen(url) as remote:
-                with (self.output_dir / f"{self.tag}-{i}.png").open("wb") as local:
-                    local.write(remote.read())
+        for i, prompt in enumerate(self.batch):
+            prompt.generate(client, self.dir / f"{self.tag}-{i}.png")
         self.update_metadata()
 
     def moderate(self) -> None:
-        submission = json.dumps([asdict(prompt) for prompt in self.batch])
+        submission = [json.dumps(asdict(prompt)) for prompt in self.batch]
         response = client.moderations.create(input=submission).results[0]
         if response.flagged:
             raise ValueError(f"Bad prompt: {self.batch}")
 
     def update_metadata(self):
-        with (self.output_dir / f"{self.tag}.txt").open("a") as metafd:
+        with (self.dir / f"{self.tag}.txt").open("a") as metafd:
             for params in self.batch:
                 metafd.write(json.dumps(asdict(params)) + "\n")
 
-    def variations(self, index: int = 0, n: int = 5) -> None:
-        self.batch.extend(self.batch[index].variations(n))
+    def variations(self, index: int = 0, n: int = 5) -> Self:
+        return type(self)(batch=list(self.batch[index].variations(n)), dir=self.dir)
 
 
 cli = Typer()
@@ -111,13 +115,12 @@ cli = Typer()
 
 @cli.command()
 def prompt(prompt: str):
-    ImageGen([Prompt(prompt)]).generate()
+    Images.new(prompt=prompt).generate()
 
 
 @cli.command()
 def auto(base: str, n: int = 5):
-    prompts = list(Prompt(base).variations(n))
-    ImageGen(prompts).generate()
+    Images.new(prompt=base).variations(n).generate()
 
 
 if __name__ == "__main__":

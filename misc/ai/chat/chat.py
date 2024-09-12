@@ -15,7 +15,6 @@ class ToolType[T](Protocol):
 class Prompt:
     messages: list[ChatCompletionMessageParam] = field(default_factory=list)
     tools: list[type[ToolType]] = field(default_factory=list)
-    client: openai.OpenAI = field(default_factory=openai.OpenAI)
     model: str = "gpt-4o-2024-08-06"
     max_tokens: int = 16384
     response_format: type[BaseModel] | None = None
@@ -28,7 +27,6 @@ class Prompt:
         return type(self)(
             messages=copy.deepcopy(self.messages),
             tools=copy.deepcopy(self.tools),
-            client=self.client,
             model=self.model,
         )
 
@@ -40,7 +38,7 @@ class Prompt:
     ) -> None:
         self.messages.append({"role": role, "content": content, **extra})  # type: ignore
 
-    def complete(self) -> None:
+    def complete(self, client: openai.OpenAI) -> None:
         args = dict(
             messages=self.messages,
             model=self.model,
@@ -50,7 +48,7 @@ class Prompt:
             args["response_format"] = self.response_format
         if self.tools:
             args["tools"] = [openai.pydantic_function_tool(tool) for tool in self.tools]
-        response = self.client.beta.chat.completions.parse(**args)
+        response = client.beta.chat.completions.parse(**args)
 
         print(f"Used {response.usage}")
         msg = response.choices[0].message
@@ -70,9 +68,9 @@ class Prompt:
             result = tool.function.parsed_arguments.exec()
             self.message("tool", result, tool_call_id=tool.id)
 
-    def complete_with_tools(self) -> None:
+    def complete_with_tools(self, client: openai.OpenAI) -> None:
         while True:
-            self.complete()
+            self.complete(client)
             if self.should_call_tools():
                 self.call_tools()
             else:
@@ -82,7 +80,20 @@ class Prompt:
 @dataclass
 class Chat:
     prompt: Prompt = field(default_factory=Prompt)
+    client: openai.OpenAI = field(default_factory=openai.OpenAI)
     inplace: bool = True
+
+    @classmethod
+    def new(
+        cls, client: openai.OpenAI | None = None, inplace: bool = True, **prompt_kwargs
+    ) -> Self:
+        kwargs = dict(
+            prompt=Prompt(**prompt_kwargs),
+            inplace=inplace,
+        )
+        if client is not None:
+            kwargs["client"] = client
+        return cls(**kwargs)
 
     def tool(self, tool: type[ToolType]) -> Self:
         self = self.copy()
@@ -108,20 +119,22 @@ class Chat:
         if self.prompt.response_format:
             self = self.copy()
             self.prompt.response_format = None
-        self.prompt.complete_with_tools()
+        self.prompt.complete_with_tools(self.client)
         return self.prompt.last.content
 
     def model[T](self, model: type[T]) -> T:
         if self.prompt.response_format is not model:
             self = self.copy()
             self.prompt.response_format = model
-        self.prompt.complete_with_tools()
+        self.prompt.complete_with_tools(self.client)
         return self.prompt.last.parsed
 
     def copy(self) -> Self:
         if self.inplace:
             return self
-        return type(self)(prompt=self.prompt.copy())
+        return type(self)(
+            prompt=self.prompt.copy(), client=self.client, inplace=self.inplace
+        )
 
 
 class EvalPython(BaseModel):
