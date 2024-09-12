@@ -9,7 +9,7 @@ import requests
 from PIL import Image
 
 from misc.ai.chat import Chat
-from misc.ai.dalle3 import Image as ImageGen
+from misc.ai.image import Image as ImageGen
 
 
 class StickerDesignModel(BaseModel):
