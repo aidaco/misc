@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal, Self, Iterator
+from typing import BinaryIO, Literal, Self, Iterator
 from time import time_ns
 import json
 import urllib.request
@@ -65,49 +65,54 @@ class Prompt:
         for prompt in response.prompts:
             yield Prompt(**prompt.model_dump())
 
-    def generate(self, client: OpenAI, path: Path) -> None:
+    def generate(self, client: OpenAI, file: BinaryIO) -> None:
         url = client.images.generate(**asdict(self)).data[0].url
         with urllib.request.urlopen(url) as remote:
-            with path.open("wb") as local:
-                local.write(remote.read())
+            file.write(remote.read())
 
 
 @dataclass
-class Images:
-    batch: list[Prompt]
-    tag: str = field(default_factory=lambda: f"{time_ns():x}")
-    dir: Path = field(default_factory=Path.cwd)
+class Image:
+    prompt: Prompt
 
     @classmethod
     def new(
         cls, tag: str | None = None, dir: Path | None = None, **prompt_kwargs
     ) -> Self:
-        kwargs = dict(batch=[Prompt(**prompt_kwargs)])
+        kwargs = dict(prompt=Prompt(**prompt_kwargs))
         if dir:
             kwargs["dir"] = dir
         if tag:
             kwargs["tag"] = tag
         return cls(**kwargs)
 
-    def generate(self):
-        self.moderate()
-        for i, prompt in enumerate(self.batch):
-            prompt.generate(client, self.dir / f"{self.tag}-{i}.png")
-        self.update_metadata()
+    def generate(self, file: BinaryIO) -> None:
+        prompt.generate(client, file)
+
+    def save(self, path: Path | None = None) -> Path:
+        if path is None:
+            path = Path.cwd() / f"{time_ns()}.png"
+
+        with path.open("wb") as file:
+            self.generate(file)
+        self.update_metadata(path)
+        return path
 
     def moderate(self) -> None:
-        submission = [json.dumps(asdict(prompt)) for prompt in self.batch]
+        submission = json.dumps(asdict(self.prompt))
         response = client.moderations.create(input=submission).results[0]
         if response.flagged:
-            raise ValueError(f"Bad prompt: {self.batch}")
+            raise ValueError(f"Bad prompt: {self.prompt}")
 
-    def update_metadata(self):
-        with (self.dir / f"{self.tag}.txt").open("a") as metafd:
-            for params in self.batch:
-                metafd.write(json.dumps(asdict(params)) + "\n")
+    def update_metadata(self, path: Path):
+        metapath = path.parent / "img_gen_data.jsonl"
+        data = json.dumps({"name": path.name, "prompt": asdict(self.prompt)}) + "\n"
+        with metapath.open("a") as metafd:
+            metafd.write(data)
 
-    def variations(self, index: int = 0, n: int = 5) -> Self:
-        return type(self)(batch=list(self.batch[index].variations(n)), dir=self.dir)
+    def variations(self, n: int = 5) -> Iterator[Self]:
+        for prompt in self.prompt.variations(n):
+            yield type(self)(prompt=prompt)
 
 
 cli = Typer()
@@ -115,12 +120,13 @@ cli = Typer()
 
 @cli.command()
 def prompt(prompt: str):
-    Images.new(prompt=prompt).generate()
+    print(Image.new(prompt=prompt).save())
 
 
 @cli.command()
-def auto(base: str, n: int = 5):
-    Images.new(prompt=base).variations(n).generate()
+def variations(base: str, n: int = 5):
+    for image in Image.new(prompt=base).variations(n):
+        print(image.save())
 
 
 if __name__ == "__main__":

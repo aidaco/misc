@@ -3,14 +3,18 @@ import cyclopts
 from wg.world import explore
 from wg.state import stateful
 
-app = cyclopts.App()
+cli = cyclopts.App()
 
 
-@app.command()
+@cli.command()
 def go():
     explore()
 
 
-@app.command()
+@cli.command()
 def state():
     stateful()
+
+
+if __name__ == "__main__":
+    cli()

@@ -1,10 +1,14 @@
 import os
+import io
+
 from openai import OpenAI
 import requests
 from PIL import Image
-import io
+
+from misc.ai.chat import Chat
 
 openai = OpenAI()
+chat = Chat(client=openai)
 output_directory = "output"
 num_prompts = 5
 convert_svg = True
@@ -14,17 +18,13 @@ os.makedirs(output_directory, exist_ok=True)
 
 
 def generate_sticker_prompts():
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": "Generate a creative idea for a specifid sticker design of at least 5 sentences.",
-            }
-        ],
-        # response_format={"type": "json_object"},
+    return (
+        chat.system("You are an expert graphic design assitant.")
+        .user(
+            "Generate a creative idea for a specifid sticker design of at least 5 sentences."
+        )
+        .text()
     )
-    return response.choices[0].message.content
 
 
 def generate_image(prompt):
