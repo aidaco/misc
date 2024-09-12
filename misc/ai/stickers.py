@@ -1,22 +1,15 @@
+from dataclasses import dataclass, field
 from typing import Iterator
 import os
 import io
+from pathlib import Path
 
-from openai import OpenAI
 from pydantic import BaseModel
 import requests
 from PIL import Image
 
 from misc.ai.chat import Chat
 from misc.ai.dalle3 import Image as ImageGen
-
-openai = OpenAI()
-chat = Chat(client=openai).system("You are an expert graphic design assitant.")
-output_directory = "output"
-convert_svg = True
-
-# Ensure the output directory exists
-os.makedirs(output_directory, exist_ok=True)
 
 
 class StickerDesignModel(BaseModel):
@@ -25,17 +18,6 @@ class StickerDesignModel(BaseModel):
 
 class StickerListModel(BaseModel):
     stickers: list[StickerDesignModel]
-
-
-def generate_stickers(n: int = 5) -> Iterator[ImageGen]:
-    for sticker in (
-        chat.user(
-            f"Generate {n} creative ideas for specific sticker designs of at least 5 sentences."
-        )
-        .model(StickerListModel)
-        .stickers
-    ):
-        yield ImageGen.new(prompt=sticker.design)
 
 
 def remove_background(image: Image.Image) -> Image.Image:
@@ -64,26 +46,46 @@ def convert_to_svg(image: Image.Image) -> bytes:
     return svg_data
 
 
-def save_image(image: Image.Image, prompt, idx):
-    base_filename = os.path.join(output_directory, f"sticker_{idx}")
-    png_path = f"{base_filename}.png"
-    image.save(png_path)
+def save_image(dir: Path, image: Image.Image, prompt, idx):
+    path = dir / f"sticker_{idx}.png"
+    image.save(path)
+    print(path)
 
     if convert_to_svg:
         svg_data = convert_to_svg(image)
-        svg_path = f"{base_filename}.svg"
-        with open(svg_path, "wb") as svg_file:
-            svg_file.write(svg_data)
+        svg_path = path.with_suffix(".svg")
+        svg_path.write_bytes(svg_data)
+        print(svg_path)
 
 
-def main(n: int = 5):
-    images = generate_stickers(n)
-    for idx, imagegen in enumerate(images):
-        image = Image.open(imagegen.generate())
-        image_no_bg = remove_background(image)
-        save_image(image_no_bg, imagegen.prompt, idx)
-        print(imagegen.prompt)
+@dataclass
+class Stickers:
+    dir: Path = field(default_factory=Path.cwd)
+    convert_svg: bool = True
+    chat: Chat = field(
+        default_factory=lambda: Chat().system(
+            "You are an expert graphic design assitant."
+        )
+    )
+
+    def generate(self, n: int = 5) -> Iterator[ImageGen]:
+        for sticker in (
+            self.chat.user(
+                f"Generate {n} creative ideas for specific sticker designs of at least 5 sentences."
+            )
+            .model(StickerListModel)
+            .stickers
+        ):
+            print(sticker.design)
+            yield ImageGen.new(prompt=sticker.design)
+
+    def save(self, n: int = 5) -> None:
+        images = self.generate(n)
+        for idx, imagegen in enumerate(images):
+            image = Image.open(imagegen.generate())
+            image_no_bg = remove_background(image)
+            save_image(self.dir, image_no_bg, imagegen.prompt, idx)
 
 
 if __name__ == "__main__":
-    main()
+    Stickers().save(5)
