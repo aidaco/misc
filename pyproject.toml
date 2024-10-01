@@ -4,6 +4,7 @@ version = "0.0.1"
 description = "Various personal utilities."
 authors = ["Aidan Courtney <aidanfc97@gmail.com>"]
 license = "MIT"
+requires-python = ">=3.12"
 
 [tool.poetry.dependencies]
 python = "^3.10"
