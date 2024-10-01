@@ -126,7 +126,6 @@ class DataclassStatements[M: DataclassType]:
                 match typing.get_args(t):
                     case (_type, None) | (None, _type):
                         unpack_type(_type, nullable=True)
-                        parts.append("NULLABLE")
                         return
                     case _:
                         raise TypeError(f"Unions not supported, except | None: {t}")
