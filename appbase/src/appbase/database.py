@@ -17,6 +17,7 @@ from typing import (
     TypeAlias,
 )
 from pathlib import Path
+from textwrap import dedent
 
 import timedelta_isoformat
 from pydantic import TypeAdapter
@@ -214,7 +215,8 @@ class Sqlite3Database:
             sqlite3.register_adapter(cls, adapter)
         for name, converter in self.CONVERTERS.items():
             sqlite3.register_converter(name, converter)
-        self.connection.executescript("""\
+        self.connection.executescript(
+            dedent("""\
             PRAGMA journal_mode = wal;
             PRAGMA synchronous = normal;
             PRAGMA temp_store = memory;
@@ -226,6 +228,7 @@ class Sqlite3Database:
             PRAGMA secure_delete = on;
             PRAGMA optimize = 0x10002;
         """)
+        )
 
     def finalize(self) -> None:
         self.connection.executescript("""\

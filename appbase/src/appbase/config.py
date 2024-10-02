@@ -7,10 +7,11 @@ from typing import (
     Callable,
     Literal,
     Mapping,
-    Self,
     Protocol,
+    Self,
     TextIO,
     TypeAlias,
+    runtime_checkable,
 )
 import json
 import typing
@@ -23,15 +24,6 @@ import yaml
 
 type Format = Literal["toml", "json", "yaml", "unsafe_yaml"]
 FORMATS: set[str] = {"toml", "json", "yaml", "safe_yaml"}
-Model: TypeAlias = BaseModel
-
-
-class ConfigConfigType[C: "Config"](Protocol):
-    __init__: Callable
-
-    def load(self) -> C: ...
-    def dump(self, config: C) -> None: ...
-    def dumps(self, config: C) -> str: ...
 
 
 def dump_str(value: Any, format: Format) -> str:
@@ -116,58 +108,67 @@ def dump_python[M](
         return adapter.dump_python(obj, mode="json")
 
 
+def load_path(path: Path, format: Format | None = None) -> dict:
+    if not path.exists():
+        return {}
+    elif path.is_dir():
+        raise ValueError(f"Expected a file not a directory: {path}")
+    _format = format or path.suffix.lstrip(".")
+    if not _format:
+        raise ValueError(f"Unknown extension {path}, pass the format as an argument.")
+    assert _format in FORMATS
+    _format = typing.cast(Format, _format)
+    with path.open("rb") as file:
+        return read_format(file, _format)
+
+
+def dump_path(
+    value: Any,
+    path: Path,
+    format: Format | None = None,
+) -> None:
+    if format is None:
+        format = typing.cast(Format, path.suffix.lstrip("."))
+        assert format in FORMATS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as file:
+        write_format(value, file, format)
+
+
+Model: TypeAlias = BaseModel
+
+
+class ConfigConfigType(Protocol):
+    def load(self) -> dict: ...
+    def dump(self, data: dict) -> None: ...
+
+
 @dataclass
 class AppdirConfigConfig:
     name: str
     override_data: dict | None = None
     override_path: Path | None = None
-    override_datadir: Path | None = None
-    override_configdir: Path | None = None
 
     @property
     def configpath(self) -> Path:
         return self.override_path or self.configdir / "config.toml"
 
     @property
-    def datadir(self) -> Path:
-        return self.override_datadir or Path(appdirs.user_data_dir(self.name)).resolve()
-
-    @property
     def configdir(self) -> Path:
-        return (
-            self.override_configdir
-            or Path(appdirs.user_config_dir(self.name)).resolve()
-        )
+        return Path(appdirs.user_config_dir(self.name)).resolve()
 
-    def load(self, format: Format | None = None, path: Path | None = None) -> "Config":
-        return Config(self, self._load(format, path))
-
-    def _load(self, format: Format | None = None, path: Path | None = None) -> dict:
-        if self.override_data:
+    def load(self, format: Format | None = None, path: Path | None = None) -> dict:
+        if self.override_data is not None:
             return self.override_data
-        path = path or self.configpath
-        if not path.exists():
-            return {}
-        elif path.is_dir():
-            raise ValueError(f"Expected a file not a directory: {path}")
-        format = typing.cast(Format, format or path.suffix.lstrip("."))
-        assert format in FORMATS
-        with self.configpath.open("rb") as file:
-            return read_format(file, format)
+        return load_path(path or self.configpath, format)
 
     def dump(
-        self, config: "Config", format: Format | None = None, path: Path | None = None
+        self, data: dict, format: Format | None = None, path: Path | None = None
     ) -> None:
-        path = path or self.configpath
-        if format is None:
-            format = typing.cast(Format, path.suffix.lstrip("."))
-            assert format in FORMATS
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with self.configpath.open("wb") as file:
-            write_format(config.dump_all(), file, format)
+        dump_path(data, path or self.configpath, format)
 
-    def dumps(self, config: "Config", format: Format = "toml") -> str:
-        return dump_str(config.dump_all(), format)
+    def dumps(self, data: dict, format: Format = "toml") -> str:
+        return dump_str(data, format)
 
 
 @dataclass
@@ -177,26 +178,23 @@ class Config[CC: ConfigConfigType]:
     section_classes: dict[str, type] = field(default_factory=dict)
     section_instances: dict[str, Any] = field(default_factory=dict)
 
-    def load(self, key: str) -> Any:
-        return parse_python(self.data[key], self.section_classes[key])
+    def get_section(self, key: str) -> Any:
+        return parse_python(self.data.get(key, {}), self.section_classes[key])
 
-    def dump(self, key: str) -> dict:
-        return dump_python(self.data[key])
+    def dump_section(self, key: str) -> dict:
+        return dump_python(self.section_instances[key])
 
     def dump_all(self) -> dict[str, dict]:
-        return {
-            key: TypeAdapter(section_class).dump_python(
-                self.section_instances[key], mode="json"
-            )
-            for key, section_class in self.section_classes.items()
-        }
+        return {key: self.dump_section(key) for key in self.section_instances}
+
+    def write(self, format: Format | None = None, path: Path | None = None) -> None:
+        self.config.dump(self, format, path)
 
     def section(self, key: str) -> Callable:
         def inner(cls: type):
             cls = dataclass(cls)
             self.section_classes[key] = cls
-            inst = parse_python(self.data.get(key, {}), cls)
-            self.section_instances[key] = inst
+            self.section_instances[key] = inst = self.get_section(key)
             return inst
 
         return inner
@@ -217,3 +215,109 @@ def configconfig(
         override_datadir=datadir,
         override_configdir=configdir,
     )
+
+
+@runtime_checkable
+class RSourceType(Protocol):
+    def load(self) -> dict: ...
+
+
+@runtime_checkable
+class RWSourceType(Protocol):
+    def load(self) -> dict: ...
+    def dump(self, data: dict) -> None: ...
+
+
+SourceType: TypeAlias = RSourceType | RWSourceType
+
+
+@dataclass
+class DictSource:
+    data: dict
+
+    def load(self) -> dict:
+        return self.data
+
+    def dump(self, data: dict) -> None:
+        self.data = data
+
+
+@dataclass
+class PathSource:
+    path: Path
+    format: Format | None = None
+
+    def load(self) -> dict:
+        return load_path(self.path, self.format)
+
+    def dump(self, data: dict) -> None:
+        dump_path(data, self.path, self.format)
+
+
+@dataclass
+class AppdirsSource:
+    name: str
+
+    @property
+    def configpath(self) -> Path:
+        return self.configdir / "config.toml"
+
+    @property
+    def configdir(self) -> Path:
+        return Path(appdirs.user_config_dir(self.name)).resolve()
+
+    @property
+    def datadir(self) -> Path:
+        return Path(appdirs.user_config_dir(self.name)).resolve()
+
+    def load(self, format: Format | None = None, path: Path | None = None) -> dict:
+        return load_path(path or self.configpath, format)
+
+    def dump(
+        self, data: dict, format: Format | None = None, path: Path | None = None
+    ) -> None:
+        dump_path(data, path or self.configpath, format)
+
+
+@dataclass
+class ConfigFromSource[S: SourceType]:
+    source: S
+    data: Mapping = field(default_factory=dict)
+    section_classes: dict[str, type] = field(default_factory=dict)
+    section_instances: dict[str, Any] = field(default_factory=dict)
+
+    def get_section(self, key: str) -> Any:
+        return parse_python(self.data.get(key, {}), self.section_classes[key])
+
+    def section_to_dict(self, key: str) -> dict:
+        return dump_python(self.section_instances[key])
+
+    def to_dict(self) -> dict[str, dict]:
+        return {key: self.section_to_dict(key) for key in self.section_instances}
+
+    @classmethod
+    def load(cls, source: SourceType) -> Self:
+        return cls(source, source.load())
+
+    def dump(self, source: SourceType | None = None) -> None:
+        src = source or self.source
+        match src:
+            case RWSourceType():
+                src.dump(self.to_dict())
+            case _:
+                raise ValueError(f"Cannot dump to read-only source {src}")
+
+    def section(self, key: str) -> Callable:
+        def inner(cls: type):
+            cls = dataclass(cls)
+            self.section_classes[key] = cls
+            self.section_instances[key] = inst = self.get_section(key)
+            return inst
+
+        return inner
+
+
+def from_appname[ST: AppdirsSource](
+    name: str, cls: type[ST] = AppdirsSource
+) -> ConfigFromSource[ST]:
+    return ConfigFromSource.load(cls(name))
