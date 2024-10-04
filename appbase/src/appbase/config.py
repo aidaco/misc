@@ -36,7 +36,7 @@ def dump_str(value: Any, format: Format) -> str:
             return yaml.dump(value)
         case "safe_yaml":
             return yaml.safe_dump(value)
-    raise ValueError("Unsupported format.")
+    raise ValueError(f"Unsupported format: {format}.")
 
 
 def write_format(value: Any, file: TextIO | BinaryIO, format: Format) -> None:
@@ -51,9 +51,9 @@ def write_format(value: Any, file: TextIO | BinaryIO, format: Format) -> None:
                     file.write(buffer.getvalue().encode())
         case "json":
             match file:
-                case TextIO():
+                case io.TextIOBase():
                     json.dump(value, file)
-                case BinaryIO():
+                case io.BufferedIOBase():
                     buffer = io.StringIO()
                     json.dump(value, buffer)
                     file.write(buffer.getvalue().encode())
@@ -61,7 +61,8 @@ def write_format(value: Any, file: TextIO | BinaryIO, format: Format) -> None:
             yaml.dump(value, file)
         case "yaml":
             yaml.dump(value, file)
-    raise ValueError("Unsupported format.")
+        case _:
+            raise ValueError(f"Unsupported format: {format}.")
 
 
 def read_format(file: TextIO | BinaryIO, format: Format) -> dict:
@@ -78,7 +79,7 @@ def read_format(file: TextIO | BinaryIO, format: Format) -> dict:
             return yaml.safe_load(file)
         case "yaml":
             return yaml.unsafe_load(file)
-    raise ValueError("Unsupported format.")
+    raise ValueError(f"Unsupported format: {format}.")
 
 
 type TypeAdapterMappingType[M] = dict[type[M], TypeAdapter[M]]
@@ -138,85 +139,6 @@ def dump_path(
 Model: TypeAlias = BaseModel
 
 
-class ConfigConfigType(Protocol):
-    def load(self) -> dict: ...
-    def dump(self, data: dict) -> None: ...
-
-
-@dataclass
-class AppdirConfigConfig:
-    name: str
-    override_data: dict | None = None
-    override_path: Path | None = None
-
-    @property
-    def configpath(self) -> Path:
-        return self.override_path or self.configdir / "config.toml"
-
-    @property
-    def configdir(self) -> Path:
-        return Path(appdirs.user_config_dir(self.name)).resolve()
-
-    def load(self, format: Format | None = None, path: Path | None = None) -> dict:
-        if self.override_data is not None:
-            return self.override_data
-        return load_path(path or self.configpath, format)
-
-    def dump(
-        self, data: dict, format: Format | None = None, path: Path | None = None
-    ) -> None:
-        dump_path(data, path or self.configpath, format)
-
-    def dumps(self, data: dict, format: Format = "toml") -> str:
-        return dump_str(data, format)
-
-
-@dataclass
-class Config[CC: ConfigConfigType]:
-    config: CC
-    data: Mapping = field(default_factory=dict)
-    section_classes: dict[str, type] = field(default_factory=dict)
-    section_instances: dict[str, Any] = field(default_factory=dict)
-
-    def get_section(self, key: str) -> Any:
-        return parse_python(self.data.get(key, {}), self.section_classes[key])
-
-    def dump_section(self, key: str) -> dict:
-        return dump_python(self.section_instances[key])
-
-    def dump_all(self) -> dict[str, dict]:
-        return {key: self.dump_section(key) for key in self.section_instances}
-
-    def write(self, format: Format | None = None, path: Path | None = None) -> None:
-        self.config.dump(self, format, path)
-
-    def section(self, key: str) -> Callable:
-        def inner(cls: type):
-            cls = dataclass(cls)
-            self.section_classes[key] = cls
-            self.section_instances[key] = inst = self.get_section(key)
-            return inst
-
-        return inner
-
-
-def configconfig(
-    name: str,
-    data: dict | None = None,
-    path: Path | None = None,
-    datadir: Path | None = None,
-    configdir: Path | None = None,
-    configcls: type[ConfigConfigType] = AppdirConfigConfig,
-) -> ConfigConfigType:
-    return configcls(
-        name,
-        override_data=data,
-        override_path=path,
-        override_datadir=datadir,
-        override_configdir=configdir,
-    )
-
-
 @runtime_checkable
 class RSourceType(Protocol):
     def load(self) -> dict: ...
@@ -229,6 +151,22 @@ class RWSourceType(Protocol):
 
 
 SourceType: TypeAlias = RSourceType | RWSourceType
+
+
+@dataclass
+class StrSource:
+    data: str
+    format: Format
+
+    def load(self) -> dict:
+        buffer = io.StringIO(self.data)
+        data = read_format(buffer, self.format)
+        return data
+
+    def dump(self, data: dict) -> None:
+        buffer = io.StringIO()
+        write_format(data, buffer, self.format)
+        self.data = buffer.getvalue()
 
 
 @dataclass
@@ -268,7 +206,7 @@ class AppdirsSource:
 
     @property
     def datadir(self) -> Path:
-        return Path(appdirs.user_config_dir(self.name)).resolve()
+        return Path(appdirs.user_data_dir(self.name)).resolve()
 
     def load(self, format: Format | None = None, path: Path | None = None) -> dict:
         return load_path(path or self.configpath, format)
@@ -280,9 +218,11 @@ class AppdirsSource:
 
 
 @dataclass
-class ConfigFromSource[S: SourceType]:
+class ConfigConfig[S: SourceType]:
     source: S
     data: Mapping = field(default_factory=dict)
+    root_instance: Any | None = None
+    root_class: type | None = None
     section_classes: dict[str, type] = field(default_factory=dict)
     section_instances: dict[str, Any] = field(default_factory=dict)
 
@@ -292,12 +232,46 @@ class ConfigFromSource[S: SourceType]:
     def section_to_dict(self, key: str) -> dict:
         return dump_python(self.section_instances[key])
 
+    def get_root(self) -> Any:
+        assert self.root_class is not None
+        return parse_python(self.data, self.root_class)
+
+    def root_to_dict(self) -> dict:
+        assert self.root_instance is not None
+        return dump_python(self.root_instance)
+
     def to_dict(self) -> dict[str, dict]:
-        return {key: self.section_to_dict(key) for key in self.section_instances}
+        return self.root_to_dict() | {
+            key: self.section_to_dict(key) for key in self.section_instances
+        }
 
     @classmethod
     def load(cls, source: SourceType) -> Self:
         return cls(source, source.load())
+
+    @classmethod
+    def load_from(
+        cls,
+        *,
+        name: str | None = None,
+        path: Path | None = None,
+        text: str | None = None,
+        format: Format | None = None,
+        map: dict | None = None,
+    ) -> Self:
+        src: SourceType
+        if name:
+            src = AppdirsSource(name)
+        elif path:
+            src = PathSource(path, format)
+        elif text:
+            assert format is not None
+            src = StrSource(text, format)
+        elif map:
+            src = DictSource(map)
+        else:
+            raise ValueError("Must pass a kwarg.")
+        return cls.load(src)
 
     def dump(self, source: SourceType | None = None) -> None:
         src = source or self.source
@@ -307,8 +281,13 @@ class ConfigFromSource[S: SourceType]:
             case _:
                 raise ValueError(f"Cannot dump to read-only source {src}")
 
-    def section(self, key: str) -> Callable:
-        def inner(cls: type):
+    def dumps(self, format: Format = "toml") -> str:
+        src = StrSource("", format)
+        self.dump(src)
+        return src.data
+
+    def section[M](self, key: str) -> Callable[[type[M]], M]:
+        def inner(cls: type[M]) -> M:
             cls = dataclass(cls)
             self.section_classes[key] = cls
             self.section_instances[key] = inst = self.get_section(key)
@@ -316,8 +295,9 @@ class ConfigFromSource[S: SourceType]:
 
         return inner
 
-
-def from_appname[ST: AppdirsSource](
-    name: str, cls: type[ST] = AppdirsSource
-) -> ConfigFromSource[ST]:
-    return ConfigFromSource.load(cls(name))
+    def root[M](self, cls: type[M]) -> M:
+        cls = dataclass(cls)
+        self.root_class = cls
+        inst = self.get_root()
+        self.root_instance = inst
+        return inst
