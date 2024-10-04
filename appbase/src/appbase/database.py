@@ -8,6 +8,7 @@ from typing import (
     Annotated,
     Callable,
     ClassVar,
+    Literal,
     Protocol,
     Self,
     Iterable,
@@ -23,6 +24,13 @@ import timedelta_isoformat
 from pydantic import TypeAdapter
 
 
+JSONB: TypeAlias = Annotated[bytes, "jsonb"]
+
+
+class DataclassType(Protocol):
+    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+
+
 class ModelType(Protocol):
     @classmethod
     def parse(cls, object: Any) -> Self: ...
@@ -31,29 +39,46 @@ class ModelType(Protocol):
     def fields(cls) -> Iterator[tuple[str, type]]: ...
 
 
+type ConflictResolutionType = Literal["ABORT", "ROLLBACK", "FAIL", "IGNORE", "REPLACE"]
+
+
 class TableStatementsType(Protocol):
     def table_name(self) -> str: ...
-    def column_defs(self, type_map: dict[type, str] = {}) -> Iterator[list[str]]: ...
+    def column_info(self) -> Iterator[tuple[str, type]]: ...
+    def column_defs(self, type_map: dict[type, str]) -> Iterator[str]: ...
+    def column_def(self, name: str, cls: type, type_map: dict[type, str]) -> str: ...
     def create_table(self, strict: bool = False) -> str: ...
-    def insert(self) -> str: ...
-    def delete(self, predicate: str = "") -> str: ...
-    def count(self) -> str: ...
+    def insert(self, conflict: ConflictResolutionType = "ABORT") -> str: ...
     def select(self, predicate: str = "") -> str: ...
     def update(self, filter: str, fields: dict) -> str: ...
+    def delete(self, predicate: str) -> str: ...
+    def count(self) -> str: ...
 
 
-class DataclassType(Protocol):
-    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
+class DatabaseType[UriType, ConnectionType, CursorType](Protocol):
+    connection: ConnectionType
+
+    @classmethod
+    def connect(cls, uri: UriType) -> Self: ...
+    @contextlib.contextmanager
+    def transact(self) -> Iterator[CursorType]: ...
+    def execute(self, sql: str, params: Sequence | dict) -> CursorType: ...
+    def table[M: ModelType](
+        self, model: type[M], statements: TableStatementsType
+    ) -> "Table[M, Self]": ...
+
+
+type AdapterType[T] = Callable[[T], bytes]
+type ConverterType[T] = Callable[[bytes], T]
+type TypeAdapterMappingType[M] = dict[type[M], TypeAdapter[M]]
+
+TYPEADAPTER_CACHE: TypeAdapterMappingType = {}
 
 
 class DataclassMeta(type):
     def __new__(cls, name, bases, dct):
         inst = super().__new__(cls, name, bases, dct)
         return dataclass(inst)  # type: ignore
-
-
-type TypeAdapterMappingType[M] = dict[type[M], TypeAdapter[M]]
-TYPEADAPTER_CACHE: TypeAdapterMappingType = {}
 
 
 def typeadapter[M](cls: type[M]) -> TypeAdapter[M]:
@@ -83,24 +108,18 @@ class DataclassModel(metaclass=DataclassMeta):
             yield field.name, field.type
 
 
-class DataclassStatements[M: DataclassType]:
+class DataclassStatements[M: ModelType](TableStatementsType):
     def __init__(self, model: type[M]) -> None:
         self.model: type[M] = model
 
     def table_name(self) -> str:
         return self.model.__name__.casefold()
 
+    def column_info(self) -> Iterator[tuple[str, type]]:
+        yield from self.model.fields()
+
     def column_defs(
         self,
-    ) -> Iterator[str]:
-        cols = ((field.name, field.type) for field in fields(self.model))
-        for name, typ in cols:
-            yield self.column_def(name, typ)
-
-    def column_def(
-        self,
-        name: str,
-        typ: type,
         type_map: dict[type, str] = {
             str: "TEXT",
             int: "INTEGER",
@@ -109,33 +128,45 @@ class DataclassStatements[M: DataclassType]:
             datetime: "DATETIME",
             timedelta: "TIMEDELTA",
             Path: "PATH",
+            JSONB: "JSONB",
         },
-    ) -> str:
-        parts = [name]
+    ) -> Iterator[str]:
+        for name, cls in self.column_info():
+            yield self.column_def(name, cls, type_map)
 
-        def unpack_type(t, nullable=False):
+    def column_def(self, name: str, cls: type, type_map: dict[type, str]) -> str:
+        sqlite_type = None
+        constraints = None
+        not_null = True
+
+        def unpack_type(t):
+            nonlocal sqlite_type, not_null, constraints
+            try:
+                sqlite_type = type_map[t]
+                return
+            except KeyError:
+                pass
             origin = typing.get_origin(t)
             if origin is Annotated:
                 match typing.get_args(t):
                     case (_type, _def):
+                        constraints = _def
                         unpack_type(_type)
-                        parts.append(_def)
                         return
                     case _:
                         raise TypeError(f"Can only accept one str annotation: {t}")
             elif origin is UnionType:
                 match typing.get_args(t):
                     case (_type, None) | (None, _type):
-                        unpack_type(_type, nullable=True)
+                        not_null = False
+                        unpack_type(_type)
                         return
                     case _:
                         raise TypeError(f"Unions not supported, except | None: {t}")
-            parts.append(type_map.get(t, "ANY"))
-            if not nullable:
-                parts.append("NOT NULL")
 
-        unpack_type(typ)
-        return " ".join(parts)
+        unpack_type(cls)
+        parts = [name, sqlite_type, "NOT NULL" if not_null else None, constraints]
+        return " ".join(p for p in parts if p)
 
     def create_table(self, strict: bool = False) -> str:
         table = self.table_name()
@@ -145,11 +176,12 @@ class DataclassStatements[M: DataclassType]:
             parts.append("STRICT")
         return " ".join(parts) + ";"
 
-    def insert(self) -> str:
+    def insert(self, conflict: ConflictResolutionType = "ABORT") -> str:
         table = self.table_name()
-        columns = ", ".join(col[0] for col in self.column_defs())
-        placeholders = ", ".join(f":{col[0]}" for col in self.column_defs())
-        return f"INSERT OR IGNORE INTO {table}({columns}) VALUES ({placeholders}) RETURNING *;"
+        names = [name for name, _ in self.column_info()]
+        columns = ", ".join(names)
+        placeholders = ", ".join(f":{name}" for name in names)
+        return f"INSERT OR {conflict} INTO {table}({columns}) VALUES ({placeholders}) RETURNING *;"
 
     def update(self, filter: dict, fields: dict) -> str:
         columns = ",".join(f"{name}=:{name}" for name in fields)
@@ -164,24 +196,8 @@ class DataclassStatements[M: DataclassType]:
 
     def select(self, predicate: str = "") -> str:
         table = self.table_name()
-        return f"SELECT * FROM {table} {predicate};"
-
-
-class DatabaseType[UriType, ConnectionType, CursorType](Protocol):
-    connection: ConnectionType
-
-    @classmethod
-    def connect(cls, uri: UriType) -> Self: ...
-    @contextlib.contextmanager
-    def transact(self) -> Iterator[CursorType]: ...
-    def execute(self, sql: str, params: Sequence | dict) -> CursorType: ...
-    def table[M: ModelType](
-        self, model: type[M], statements: TableStatementsType
-    ) -> "Table[M, Self]": ...
-
-
-type AdapterType[T] = Callable[[T], bytes]
-type ConverterType[T] = Callable[[bytes], T]
+        columns = ", ".join(name for name, _ in self.column_info())
+        return f"SELECT {columns} FROM {table} {predicate};"
 
 
 @dataclass
@@ -202,8 +218,11 @@ class Sqlite3Database:
     @classmethod
     def connect(cls, uri: Path | str, echo: bool = True) -> Self:
         connection = sqlite3.connect(
-            uri, autocommit=True, detect_types=sqlite3.PARSE_DECLTYPES, timeout=30
-        )  # type: ignore
+            uri,
+            autocommit=True,  # type: ignore
+            detect_types=sqlite3.PARSE_DECLTYPES,
+            timeout=30,
+        )
         if echo:
             connection.set_trace_callback(print)
         instance = cls(uri=uri, connection=connection)
@@ -231,11 +250,13 @@ class Sqlite3Database:
         )
 
     def finalize(self) -> None:
-        self.connection.executescript("""\
+        self.connection.executescript(
+            dedent("""\
             VACUUM;
             PRAGMA analysis_limit=400;
             PRAGMA optimize;
         """)
+        )
 
     def close(self) -> None:
         self.finalize()
@@ -251,7 +272,7 @@ class Sqlite3Database:
             cursor.execute("BEGIN EXCLUSIVE")
             yield cursor
             cursor.execute("COMMIT")
-        except sqlite3.OperationalError as exc:
+        except sqlite3.Error as exc:
             cursor.execute("ROLLBACK")
             raise exc
         finally:
@@ -332,9 +353,10 @@ class Table[M: ModelType, D: DatabaseType](metaclass=DataclassMeta):
                 "Must supply model type to __init__ or as classvar on subclass."
             )
         kwargs["model"] = model
-        kwargs["statements"] = (
+        stmts: TableStatementsType = (
             statements or getattr(cls, "statements", None) or DataclassStatements(model)
         )
+        kwargs["statements"] = stmts
         inst = cls(**kwargs, **extra)
         inst.initialize()
         return inst
@@ -357,7 +379,7 @@ class Table[M: ModelType, D: DatabaseType](metaclass=DataclassMeta):
     def insert(
         self, param: dict | Sequence | M | None = None, **fields: Any
     ) -> M | None:
-        if not param and not fields:
+        if param is None and not fields:
             raise ValueError("Must pass param object or field kwargs.")
         with self.transact() as cursor:
             return cursor.execute(self.statements.insert(), param or fields).one()
