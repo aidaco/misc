@@ -25,6 +25,7 @@ from pydantic import TypeAdapter
 
 
 JSONB: TypeAlias = Annotated[bytes, "jsonb"]
+intPK: TypeAlias = Annotated[int, "PRIMARY KEY"]
 
 
 class DataclassType(Protocol):
