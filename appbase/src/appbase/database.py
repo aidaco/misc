@@ -419,7 +419,7 @@ class Table[M: ModelType, D: DatabaseType](metaclass=DataclassMeta):
             return cursor.execute(self.statements.delete(predicate), params)
 
     def count(self) -> int:
-        return self.database.connection(self.statements.count()).fetchone()[0]
+        return self.database.connection.execute(self.statements.count()).fetchone()[0]
 
     def select(self, predicate: str = "", params: dict = {}) -> Cursor[M]:
         return self.execute(self.statements.select(predicate), params)
