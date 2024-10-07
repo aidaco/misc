@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Annotated
 from urllib.parse import quote
@@ -128,10 +129,148 @@ class TaskStore(appbase.Table[Task, appbase.Database]):
         )
 
 
-users = UserStore.attach(db)
-calls = CallStore.attach(db)
-tasks = TaskStore.attach(db)
+@contextmanager
+def lifespan(app: FastAPI):
+    with appbase.Database.connect(config.uri) as db:
+        app.state.users = UserStore.attach(db)
+        app.state.calls = CallStore.attach(db)
+        app.state.tasks = TaskStore.attach(db)
+        yield
+
+
+def depends_userstore(request: Request) -> UserStore:
+    return request.app.state.users
+
+
+def depends_callstore(request: Request) -> CallStore:
+    return request.app.state.calls
+
+
+def depends_taskstore(request: Request) -> TaskStore:
+    return request.app.state.tasks
+
+
+Users = Annotated[UserStore, Depends(depends_userstore)]
+
+
+def hash_password(password: str) -> str:
+    return hasher.hash(password)
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    return hasher.verify(password_hash, password)
+
+
+def create_token(user: "User", dur: timedelta, secret: str) -> str:
+    return jwt.encode(
+        {"user_id": user.id, "exp": datetime.now(timezone.utc) + dur},
+        secret,
+        algorithm="HS256",
+    )
+
+
+def verify_token(token: str, secret: str) -> int:
+    try:
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        return payload["user_id"]
+    except jwt.DecodeError:
+        raise ValueError("Invalid token")
+
+
+class LoginRequired(Exception):
+    pass
+
+
+def authenticated(users: Users, token: Annotated[str | None, Cookie()] = None) -> User:
+    try:
+        assert token is not None
+        return users.get(verify_token(token, config.jwt_secret))
+    except (ValueError, AssertionError):
+        raise LoginRequired()
+
+
 app = FastAPI()
+
+
+@app.exception_handler(LoginRequired)
+def login_required_exception_handler(request: Request, _: LoginRequired):
+    return RedirectResponse(f"/login?next={quote(request.url._url)}")
+
+
+@app.get("/login", response_class=HTMLResponse)
+def get_login_page(next: Annotated[str, Query()] = "/"):
+    return LOGIN_HTML.render(next=next)
+
+
+@app.post("/login")
+def post_login_page(
+    name: Annotated[str, Form()],
+    password: Annotated[str, Form()],
+    next: Annotated[str, Form()],
+):
+    try:
+        user = users.login(name, password)
+    except ValueError:
+        return RedirectResponse(f"/login?next={next!r}")
+    response = RedirectResponse("/", status_code=status.HTTP_302_FOUND)
+    response.set_cookie(
+        "token",
+        create_token(user, timedelta(days=1), config.jwt_secret),
+        secure=True,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+@app.get("/", response_class=HTMLResponse)
+def get_homepage(_: Annotated[User, Depends(authenticated)]):
+    return HOMEPAGE_HTML.render(
+        calls=calls,
+        tasks=tasks,
+    )
+
+
+@app.get("/call/create", response_class=HTMLResponse)
+def get_create_call_form(user: Annotated[User, Depends(authenticated)]):
+    return CREATE_CALL_FORM_HTML.render(current_datetime=datetime.now().astimezone())
+
+
+@app.post("/call/create")
+def post_create_call_form(
+    received_at: Annotated[datetime, Form()],
+    number: Annotated[str, Form()],
+    caller: Annotated[str, Form()],
+    notes: Annotated[str, Form()],
+    user: Annotated[User, Depends(authenticated)],
+):
+    calls.insert(received_at.astimezone(), user, number, caller, notes)
+    return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
+
+
+@app.get("/task/create", response_class=HTMLResponse)
+def get_create_task_form(user: Annotated[User, Depends(authenticated)]):
+    return CREATE_TASK_FORM_HTML.render(calls=calls)
+
+
+@app.post("/task/create")
+def post_create_task_form(
+    name: Annotated[str, Form()],
+    notes: Annotated[str, Form()],
+    user: Annotated[User, Depends(authenticated)],
+    call_id: Annotated[int | None, Form()] = None,
+):
+    call = calls.get(call_id) if call_id is not None else None
+    tasks.insert(user, call, name, notes)
+    return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
+
+
+def serve(host: str = "0.0.0.0", port: int = 8080, reload: bool = True) -> None:
+    uvicorn.run("misc.call_log:app", host="0.0.0.0", port=8000, reload=True)
+
+
+if __name__ == "__main__":
+    serve()
 
 LOGIN_HTML = jinja2.Template("""
 <html>
@@ -454,123 +593,6 @@ CREATE_TASK_FORM_HTML = jinja2.Template("""
     </body>
 </html>
 """)
-
-
-def hash_password(password: str) -> str:
-    return hasher.hash(password)
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    return hasher.verify(password_hash, password)
-
-
-def create_token(user: "User", dur: timedelta, secret: str) -> str:
-    return jwt.encode(
-        {"user_id": user.id, "exp": datetime.now(timezone.utc) + dur},
-        secret,
-        algorithm="HS256",
-    )
-
-
-def verify_token(token: str, secret: str) -> int:
-    try:
-        payload = jwt.decode(token, secret, algorithms=["HS256"])
-        return payload["user_id"]
-    except jwt.DecodeError:
-        raise ValueError("Invalid token")
-
-
-class LoginRequired(Exception):
-    pass
-
-
-def authenticated(token: Annotated[str | None, Cookie()] = None) -> User:
-    try:
-        assert token is not None
-        return users.get(verify_token(token, config.jwt_secret))
-    except (ValueError, AssertionError):
-        raise LoginRequired()
-
-
-@app.exception_handler(LoginRequired)
-def login_required_exception_handler(request: Request, _: LoginRequired):
-    return RedirectResponse(f"/login?next={quote(request.url._url)}")
-
-
-@app.get("/login", response_class=HTMLResponse)
-def get_login_page(next: Annotated[str, Query()] = "/"):
-    return LOGIN_HTML.render(next=next)
-
-
-@app.post("/login")
-def post_login_page(
-    name: Annotated[str, Form()],
-    password: Annotated[str, Form()],
-    next: Annotated[str, Form()],
-):
-    try:
-        user = users.login(name, password)
-    except ValueError:
-        return RedirectResponse(f"/login?next={next!r}")
-    response = RedirectResponse("/", status_code=status.HTTP_302_FOUND)
-    response.set_cookie(
-        "token",
-        create_token(user, timedelta(days=1), config.jwt_secret),
-        secure=True,
-        httponly=True,
-        samesite="strict",
-    )
-    return response
-
-
-@app.get("/", response_class=HTMLResponse)
-def get_homepage(_: Annotated[User, Depends(authenticated)]):
-    return HOMEPAGE_HTML.render(
-        calls=calls,
-        tasks=tasks,
-    )
-
-
-@app.get("/call/create", response_class=HTMLResponse)
-def get_create_call_form(user: Annotated[User, Depends(authenticated)]):
-    return CREATE_CALL_FORM_HTML.render(current_datetime=datetime.now().astimezone())
-
-
-@app.post("/call/create")
-def post_create_call_form(
-    received_at: Annotated[datetime, Form()],
-    number: Annotated[str, Form()],
-    caller: Annotated[str, Form()],
-    notes: Annotated[str, Form()],
-    user: Annotated[User, Depends(authenticated)],
-):
-    calls.insert(received_at.astimezone(), user, number, caller, notes)
-    return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
-
-
-@app.get("/task/create", response_class=HTMLResponse)
-def get_create_task_form(user: Annotated[User, Depends(authenticated)]):
-    return CREATE_TASK_FORM_HTML.render(calls=calls)
-
-
-@app.post("/task/create")
-def post_create_task_form(
-    name: Annotated[str, Form()],
-    notes: Annotated[str, Form()],
-    user: Annotated[User, Depends(authenticated)],
-    call_id: Annotated[int | None, Form()] = None,
-):
-    call = calls.get(call_id) if call_id is not None else None
-    tasks.insert(user, call, name, notes)
-    return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
-
-
-def serve(host: str = "0.0.0.0", port: int = 8080, reload: bool = True) -> None:
-    uvicorn.run("misc.call_log:app", host="0.0.0.0", port=8000, reload=True)
-
-
-if __name__ == "__main__":
-    serve()
 
 # sqlite3.register_adapter(datetime, datetime.isoformat)
 # sqlite3.register_converter(

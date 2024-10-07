@@ -295,6 +295,12 @@ class Sqlite3Database:
     tx = transact
     ex = execute
 
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc, exc_type, tb) -> None:
+        self.close()
+
 
 @dataclass
 class Cursor[M: ModelType]:

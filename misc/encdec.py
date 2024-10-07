@@ -96,7 +96,7 @@ def decrypt(password: str, encrypted: str) -> str:
 
 KEY_LEN_BYTES = 32
 SALT_LEN_BYTES = 16
-NONCE_LEN_BYTES = 12
+NONCE_LEN_BYTES = 24
 
 
 def kdf(secret: bytes, salt: bytes):
