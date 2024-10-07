@@ -2,6 +2,7 @@ import contextlib
 from types import UnionType
 import typing
 import sqlite3
+import types
 from dataclasses import Field, dataclass, fields
 from datetime import datetime, timedelta, timezone
 from typing import (
@@ -106,7 +107,7 @@ class DataclassModel(metaclass=DataclassMeta):
     @classmethod
     def fields(cls) -> Iterator[tuple[str, type]]:
         for field in fields(cls):
-            yield field.name, field.type
+            yield (field.name, field.type)
 
 
 class DataclassStatements[M: ModelType](TableStatementsType):
@@ -121,7 +122,7 @@ class DataclassStatements[M: ModelType](TableStatementsType):
 
     def column_defs(
         self,
-        type_map: dict[type, str] = {
+        type_map: dict[type | Any, str] = {
             str: "TEXT",
             int: "INTEGER",
             float: "REAL",
@@ -158,7 +159,7 @@ class DataclassStatements[M: ModelType](TableStatementsType):
                         raise TypeError(f"Can only accept one str annotation: {t}")
             elif origin is UnionType:
                 match typing.get_args(t):
-                    case (_type, None) | (None, _type):
+                    case (_type, types.NoneType) | (types.NoneType, _type):
                         not_null = False
                         unpack_type(_type)
                         return
@@ -218,6 +219,8 @@ class Sqlite3Database:
 
     @classmethod
     def connect(cls, uri: Path | str, echo: bool = True) -> Self:
+        if isinstance(uri, Path):
+            uri.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(
             uri,
             autocommit=True,  # type: ignore
@@ -334,7 +337,7 @@ class Table[M: ModelType, D: DatabaseType](metaclass=DataclassMeta):
         statements: TableStatementsType | None = None,
         echo: bool = True,
         **extra: Any,
-    ) -> "Table[M, Sqlite3Database]":
+    ) -> Self:
         return cls.attach(
             Sqlite3Database.connect(uri, echo), model, statements, **extra
         )
@@ -346,7 +349,7 @@ class Table[M: ModelType, D: DatabaseType](metaclass=DataclassMeta):
         model: type[M] | None = None,
         statements: TableStatementsType | None = None,
         **extra: Any,
-    ) -> "Table[M, D]":
+    ) -> Self:
         kwargs: dict[str, Any] = dict(database=database)
         model = model or getattr(cls, "MODEL", None)
         if model is None:
