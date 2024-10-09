@@ -207,7 +207,7 @@ class Sqlite3Database:
     uri: str | Path
     connection: sqlite3.Connection
     ADAPTERS: ClassVar[dict[type, AdapterType]] = {
-        datetime: lambda dt: dt.astimezone(timezone.utc).isoformat(dt).encode(),
+        datetime: lambda dt: dt.astimezone(timezone.utc).isoformat().encode(),
         Path: Path.__bytes__,
         timedelta: lambda td: timedelta_isoformat.timedelta.isoformat(td).encode(),
     }
@@ -276,7 +276,7 @@ class Sqlite3Database:
             cursor.execute("BEGIN EXCLUSIVE")
             yield cursor
             cursor.execute("COMMIT")
-        except sqlite3.Error as exc:
+        except Exception as exc:
             cursor.execute("ROLLBACK")
             raise exc
         finally:
