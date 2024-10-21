@@ -165,6 +165,9 @@ class DataclassStatements[M: ModelType](TableStatementsType):
                         return
                     case _:
                         raise TypeError(f"Unions not supported, except | None: {t}")
+            elif origin is Literal:
+                first = typing.get_args(origin)[0]
+                unpack_type(type(first))
 
         unpack_type(cls)
         parts = [name, sqlite_type, "NOT NULL" if not_null else None, constraints]

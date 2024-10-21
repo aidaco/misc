@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Annotated
 from urllib.parse import quote
@@ -6,9 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, Depends, Query, Cookie, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-import jwt
 import jinja2
-import argon2
 import uvicorn
 
 import appbase
@@ -21,15 +19,15 @@ class rootconfig:
     datadir: Path = confconf.source.datadir
 
 
-@confconf.section("call_log")
-class config:
-    uri: str | Path = rootconfig.datadir / "call_log.sqlite3"
+@confconf.section("auth")
+class authconfig:
     jwt_secret: str = "secret"
     jwt_duration: timedelta = timedelta(days=1)
 
 
-db = appbase.Database.connect(config.uri)
-hasher = argon2.PasswordHasher()
+@confconf.section("db")
+class config:
+    uri: str | Path = rootconfig.datadir / "call_log.sqlite3"
 
 
 class User(appbase.Model):
@@ -51,14 +49,16 @@ class UserStore(appbase.Table[User, appbase.Database]):
         return super().insert(
             (
                 name,
-                hasher.hash(password),
+                appbase.security.hash_password(password),
                 datetime.now(timezone.utc),
             )
         )
 
     def login(self, name: str, password: str) -> User:
         row = self.select("WHERE name=:name", {"name": name}).one()
-        if row is None or not verify_password(password, row.password_hash):
+        if row is None or not appbase.security.verify_password(
+            password, row.password_hash
+        ):
             raise ValueError("Login failed.")
         return row
 
@@ -129,15 +129,6 @@ class TaskStore(appbase.Table[Task, appbase.Database]):
         )
 
 
-@contextmanager
-def lifespan(app: FastAPI):
-    with appbase.Database.connect(config.uri) as db:
-        app.state.users = UserStore.attach(db)
-        app.state.calls = CallStore.attach(db)
-        app.state.tasks = TaskStore.attach(db)
-        yield
-
-
 def depends_userstore(request: Request) -> UserStore:
     return request.app.state.users
 
@@ -151,45 +142,37 @@ def depends_taskstore(request: Request) -> TaskStore:
 
 
 Users = Annotated[UserStore, Depends(depends_userstore)]
-
-
-def hash_password(password: str) -> str:
-    return hasher.hash(password)
-
-
-def verify_password(password: str, password_hash: str) -> bool:
-    return hasher.verify(password_hash, password)
-
-
-def create_token(user: "User", dur: timedelta, secret: str) -> str:
-    return jwt.encode(
-        {"user_id": user.id, "exp": datetime.now(timezone.utc) + dur},
-        secret,
-        algorithm="HS256",
-    )
-
-
-def verify_token(token: str, secret: str) -> int:
-    try:
-        payload = jwt.decode(token, secret, algorithms=["HS256"])
-        return payload["user_id"]
-    except jwt.DecodeError:
-        raise ValueError("Invalid token")
+Tasks = Annotated[TaskStore, Depends(depends_taskstore)]
+Calls = Annotated[CallStore, Depends(depends_callstore)]
 
 
 class LoginRequired(Exception):
     pass
 
 
-def authenticated(users: Users, token: Annotated[str | None, Cookie()] = None) -> User:
+def depends_authentication(
+    users: Users, token: Annotated[str | None, Cookie()] = None
+) -> User:
     try:
         assert token is not None
-        return users.get(verify_token(token, config.jwt_secret))
+        return users.get(appbase.security.verify_token(token, authconfig.jwt_secret))
     except (ValueError, AssertionError):
         raise LoginRequired()
 
 
-app = FastAPI()
+Authenticated = Annotated[User, Depends(depends_authentication)]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    with appbase.Database.connect(config.uri) as db:
+        app.state.users = UserStore.attach(db)
+        app.state.calls = CallStore.attach(db)
+        app.state.tasks = TaskStore.attach(db)
+        yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.exception_handler(LoginRequired)
@@ -204,6 +187,7 @@ def get_login_page(next: Annotated[str, Query()] = "/"):
 
 @app.post("/login")
 def post_login_page(
+    users: Users,
     name: Annotated[str, Form()],
     password: Annotated[str, Form()],
     next: Annotated[str, Form()],
@@ -215,7 +199,9 @@ def post_login_page(
     response = RedirectResponse("/", status_code=status.HTTP_302_FOUND)
     response.set_cookie(
         "token",
-        create_token(user, timedelta(days=1), config.jwt_secret),
+        appbase.security.create_token(
+            user.id, timedelta(days=1), authconfig.jwt_secret
+        ),
         secure=True,
         httponly=True,
         samesite="strict",
@@ -224,7 +210,7 @@ def post_login_page(
 
 
 @app.get("/", response_class=HTMLResponse)
-def get_homepage(_: Annotated[User, Depends(authenticated)]):
+def get_homepage(calls: Calls, tasks: Tasks, _: Authenticated):
     return HOMEPAGE_HTML.render(
         calls=calls,
         tasks=tasks,
@@ -232,32 +218,41 @@ def get_homepage(_: Annotated[User, Depends(authenticated)]):
 
 
 @app.get("/call/create", response_class=HTMLResponse)
-def get_create_call_form(user: Annotated[User, Depends(authenticated)]):
+def get_create_call_form(user: Authenticated):
     return CREATE_CALL_FORM_HTML.render(current_datetime=datetime.now().astimezone())
 
 
 @app.post("/call/create")
 def post_create_call_form(
+    user: Authenticated,
+    calls: Calls,
     received_at: Annotated[datetime, Form()],
     number: Annotated[str, Form()],
     caller: Annotated[str, Form()],
     notes: Annotated[str, Form()],
-    user: Annotated[User, Depends(authenticated)],
 ):
-    calls.insert(received_at.astimezone(), user, number, caller, notes)
+    calls.insert(
+        received_at=received_at.astimezone(),
+        received_by=user,
+        number=number,
+        caller=caller,
+        notes=notes,
+    )
     return RedirectResponse("/", status_code=status.HTTP_302_FOUND)
 
 
 @app.get("/task/create", response_class=HTMLResponse)
-def get_create_task_form(user: Annotated[User, Depends(authenticated)]):
+def get_create_task_form(_: Authenticated, calls: Calls):
     return CREATE_TASK_FORM_HTML.render(calls=calls)
 
 
 @app.post("/task/create")
 def post_create_task_form(
+    user: Authenticated,
+    calls: Calls,
+    tasks: Tasks,
     name: Annotated[str, Form()],
     notes: Annotated[str, Form()],
-    user: Annotated[User, Depends(authenticated)],
     call_id: Annotated[int | None, Form()] = None,
 ):
     call = calls.get(call_id) if call_id is not None else None
@@ -266,7 +261,7 @@ def post_create_task_form(
 
 
 def serve(host: str = "0.0.0.0", port: int = 8080, reload: bool = True) -> None:
-    uvicorn.run("misc.call_log:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("misc.call_log:app", host="0.0.0.0", port=8000, reload=reload)
 
 
 if __name__ == "__main__":
