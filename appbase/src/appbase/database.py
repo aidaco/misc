@@ -271,7 +271,10 @@ class Sqlite3Database:
         self.connection.close()
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except sqlite3.Error:
+            pass
 
     @contextlib.contextmanager
     def transact(self) -> Iterator[sqlite3.Cursor]:

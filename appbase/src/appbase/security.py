@@ -14,17 +14,18 @@ def verify_password(password: str, password_hash: str) -> bool:
     return _hasher.verify(password_hash, password)
 
 
-def create_token(id: int, dur: timedelta, secret: str) -> str:
+def create_token(data: dict, dur: timedelta, secret: str) -> str:
     return jwt.encode(
-        {"id": id, "exp": datetime.now(timezone.utc) + dur},
+        data | {"exp": datetime.now(timezone.utc) + dur},
         secret,
         algorithm="HS256",
     )
 
 
-def verify_token(token: str, secret: str) -> int:
+def verify_token(token: str, secret: str) -> dict:
     try:
         payload = jwt.decode(token, secret, algorithms=["HS256"])
-        return payload["id"]
+        payload.pop("exp")
+        return payload
     except jwt.DecodeError:
         raise ValueError("Invalid token")
