@@ -3,7 +3,6 @@ from textwrap import dedent
 from typing import (
     Callable,
     ContextManager,
-    Never,
     Protocol,
     overload,
     Any,
@@ -12,12 +11,9 @@ from typing import (
     Annotated,
     Literal,
     TypeAlias,
-    get_origin,
-    get_args,
     ClassVar,
 )
-from dataclasses import fields, dataclass
-from types import UnionType
+from dataclasses import fields
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,7 +22,7 @@ import sqlite3
 import pydantic
 import timedelta_isoformat
 
-import sqlstmt
+import appbase.sqlstmt as sqlstmt
 
 
 class DataclassLike(Protocol):
@@ -41,26 +37,6 @@ MISSING = object()
 MissingType = type(MISSING)
 JSONB: TypeAlias = Annotated[bytes, "jsonb"]
 INTPK: TypeAlias = Annotated[int, "PRIMARY KEY"]
-
-
-class StatementsType(Protocol):
-    def table_name(self) -> str: ...
-    def column_info(self) -> Iterator[tuple[str, type]]: ...
-    def column_defs(
-        self,
-        type_map: dict[type | Any, str] = dict(),
-    ) -> Iterator[str]: ...
-    def column_def(self, name: str, cls: type, type_map: dict[type, str]) -> str: ...
-    def create_table(self, strict: bool = False) -> str: ...
-    def insert(
-        self,
-        fields: list[str] | None = None,
-        conflict: ConflictResolutionType = "ABORT",
-    ) -> str: ...
-    def update(self, set: str, where: str) -> str: ...
-    def delete(self, predicate: str = "") -> str: ...
-    def count(self) -> str: ...
-    def select(self, predicate: str = "") -> str: ...
 
 
 TYPEADAPTER_CACHE: dict[type, pydantic.TypeAdapter] = {}
@@ -124,9 +100,6 @@ class ParseCursor(EZCursor):
     def parsed[M: ModelType](self, model: type[M]) -> Iterator[M]:
         yield from (validate(row, model) for row in self)
 
-    def query(self, model: type[ModelType]) -> sqlstmt.ModelStatements[Self]:
-        return sqlstmt.sql(model, self)
-
 
 class ModelCursor[M: ModelType](EZCursor):
     model: type[M]
@@ -140,9 +113,6 @@ class ModelCursor[M: ModelType](EZCursor):
     def fetchmany(self, size: int | None = 1) -> list[M]:
         return [validate(row, self.model) for row in super().fetchmany(size)]
 
-    def query(self) -> sqlstmt.ModelStatements[Self]:
-        return sqlstmt.sql(self.model, self)
-
     def __iter__(self) -> Self:
         return self
 
@@ -154,150 +124,49 @@ class Repository:
     def __init__(self, connection: sqlite3.Connection | None = None) -> None:
         self.connection: sqlite3.Connection | None = connection
 
-    def connect(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    def cursor(self, connection: sqlite3.Connection | None = None) -> ParseCursor:
+        connection = connection or self.connection
+        if connection is None:
+            raise ValueError("Must pass in a connection or cursor at some point.")
+        return connection.cursor(ParseCursor)  # type: ignore
 
-    def cursor(self) -> ParseCursor:
-        assert self.connection is not None
-        return self.connection.cursor(ParseCursor)  # type: ignore
-
-    def transact(self) -> ContextManager[ParseCursor]:
-        return self.cursor().transact()
-
-    def execute(self, sql, *var_params, **kw_params) -> ParseCursor:
-        return self.cursor().execute(sql, *var_params, **kw_params)
-
-    def query(self, model: type[ModelType]) -> sqlstmt.ModelStatements[ParseCursor]:
-        return self.cursor().query(model)
-
-
-class __ModelStatements:
-    def table_name(self) -> str: ...
-    def column_info(self) -> Iterator[tuple[str, type]]: ...
-
-    def column_defs(
+    def execute(
         self,
-        type_map: dict[type | Any, str] = {
-            str: "TEXT",
-            int: "INTEGER",
-            float: "REAL",
-            bytes: "BLOB",
-            datetime: "DATETIME",
-            timedelta: "TIMEDELTA",
-            Path: "PATH",
-            JSONB: "JSONB",
-        },
-    ) -> Iterator[str]:
-        for name, cls in self.column_info():
-            yield self.column_def(name, cls, type_map)
+        sql: str,
+        *params,
+        connection: sqlite3.Connection | None = None,
+        **kwparams,
+    ) -> ParseCursor:
+        return self.cursor(connection).execute(sql, *params, **kwparams)
 
-    def column_def(self, name: str, cls: type, type_map: dict[type, str]) -> str:
-        sqlite_type = None
-        constraints = None
-        not_null = True
-
-        def unpack_type(t):
-            nonlocal sqlite_type, not_null, constraints
-            try:
-                sqlite_type = type_map[t]
-                return
-            except KeyError:
-                pass
-            origin = get_origin(t)
-            if origin is Annotated:
-                match get_args(t):
-                    case (_type, _def):
-                        constraints = _def
-                        unpack_type(_type)
-                        return
-                    case _:
-                        raise TypeError(f"Can only accept one str annotation: {t}")
-            elif origin is UnionType:
-                match get_args(t):
-                    case (_type, None) | (None, _type):
-                        not_null = False
-                        unpack_type(_type)
-                        return
-                    case _:
-                        raise TypeError(f"Unions not supported, except | None: {t}")
-
-        unpack_type(cls)
-        parts = [name, sqlite_type, "NOT NULL" if not_null else None, constraints]
-        return " ".join(p for p in parts if p)
-
-    def create_table(self, strict: bool = False) -> str:
-        table = self.table_name()
-        columns = ", ".join(self.column_defs())
-        parts = [f"CREATE TABLE IF NOT EXISTS {table}({columns})"]
-        if strict:
-            parts.append("STRICT")
-        return " ".join(parts) + ";"
-
-    def insert(
-        self,
-        fields: list[str] | None = None,
-        conflict: ConflictResolutionType = "ABORT",
-    ) -> str:
-        table = self.table_name()
-        if fields is not None:
-            names = fields
-            placeholders = ", ".join(f":{name}" for name in names)
-        else:
-            names = [name for name, _ in self.column_info()]
-            placeholders = ", ".join("?" for _ in names)
-
-        columns = ", ".join(names)
-        return f"INSERT OR {conflict} INTO {table}({columns}) VALUES ({placeholders}) RETURNING *;"
-
-    def update(self, set: str, where: str) -> str:
-        return f"UPDATE {self.table_name()} SET {set} WHERE {where} RETURNING *"
-
-    def delete(self, predicate: str = "") -> str:
-        return f"DELETE FROM {self.table_name()} {predicate} RETURNING *;"
-
-    def count(self) -> str:
-        table = self.table_name()
-        return f"SELECT COUNT(*) FROM {table}"
-
-    def select(self, predicate: str = "") -> str:
-        table = self.table_name()
-        columns = ", ".join(name for name, _ in self.column_info())
-        return f"SELECT {columns} FROM {table} {predicate};"
+    def transact(
+        self, connection: sqlite3.Connection | None = None
+    ) -> ContextManager[ParseCursor]:
+        return self.cursor(connection).transact()
 
 
 class Table[M: ModelType]:
     def __init__(
-        self,
-        model: type[M],
-        connection: sqlite3.Connection | None = None,
+        self, model: type[M], connection: sqlite3.Connection | None = None
     ) -> None:
-        self.connection: sqlite3.Connection | None = connection
         self.model: type[M] = model
+        self.connection: sqlite3.Connection | None = connection
 
-    def connect(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
-        self.create_table()
-
-    def cursor(self) -> ModelCursor[M]:
-        assert self.connection is not None
-        cursor = self.connection.cursor(ModelCursor)  # type: ignore
+    def cursor(self, connection: sqlite3.Connection | None = None) -> ModelCursor[M]:
+        connection = connection or self.connection
+        if connection is None:
+            raise ValueError("Must pass in a connection or cursor at some point.")
+        cursor = connection.cursor(ModelCursor)  # type: ignore
         cursor.model = self.model
         return cursor
 
-    def execute(self, sql: str, *params: Any, **kwparams: Any) -> ModelCursor[M]:
-        return self.cursor().execute(sql, *params, **kwparams)
+    def transact(
+        self, connection: sqlite3.Connection | None = None
+    ) -> ContextManager[ModelCursor[M]]:
+        return self.cursor(connection).transact()
 
-    def sql(self) -> sqlstmt.ModelStatements[Never]:
-        return sqlstmt.sql(self.model)
-
-    def query(self) -> sqlstmt.ModelStatements[ModelCursor[M]]:
-        return self.cursor().query()
-
-    def transact(self) -> ContextManager[ModelCursor[M]]:
-        return self.cursor().transact()
-
-    def create_table(self) -> None:
-        self.query().create().if_not_exists().execute()
+    def create_table(self, cursor: sqlite3.Cursor | None = None) -> None:
+        sqlstmt.create(self.model).if_not_exists().execute(cursor or self.cursor())
 
 
 ADAPTERS: dict[type, AdapterType] = {
@@ -326,7 +195,7 @@ def connect(
 ) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(
         uri,
-        autocommit=autocommit,
+        autocommit=autocommit,  # type: ignore
         detect_types=detect_types,
         timeout=timeout,
         **kwargs,
