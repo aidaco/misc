@@ -1,449 +1,322 @@
-import contextlib
-from types import UnionType
-import typing
-import sqlite3
-import types
-from dataclasses import Field, dataclass, fields
-from datetime import datetime, timedelta, timezone
-from typing import (
-    Annotated,
-    Callable,
-    ClassVar,
-    Literal,
-    Protocol,
-    Self,
-    Iterable,
-    Iterator,
-    Any,
-    Sequence,
-    TypeAlias,
-)
-from pathlib import Path
 from textwrap import dedent
+from typing import (
+    Callable,
+    ContextManager,
+    Protocol,
+    overload,
+    Any,
+    Iterator,
+    Self,
+    Annotated,
+    Literal,
+    TypeAlias,
+    ClassVar,
+    runtime_checkable,
+)
+from dataclasses import fields
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sqlite3
 
+import pydantic
 import timedelta_isoformat
-from pydantic import TypeAdapter
+
+import appbase.statements
 
 
-JSONB: TypeAlias = Annotated[bytes, "jsonb"]
-INTPK: TypeAlias = Annotated[int, "PRIMARY KEY"]
-STRPK: TypeAlias = Annotated[str, "PRIMARY KEY"]
+@runtime_checkable
+class DataclassLike(Protocol):
+    __dataclass_fields__: ClassVar[dict]
 
 
-class DataclassType(Protocol):
-    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
-
-
-class ModelType(Protocol):
-    @classmethod
-    def parse(cls, object: Any) -> Self: ...
-    def to_dict(self) -> dict: ...
-    @classmethod
-    def fields(cls) -> Iterator[tuple[str, type]]: ...
-
-
+type ModelType = pydantic.BaseModel | DataclassLike
 type ConflictResolutionType = Literal["ABORT", "ROLLBACK", "FAIL", "IGNORE", "REPLACE"]
-
-
-class TableStatementsType(Protocol):
-    def table_name(self) -> str: ...
-    def column_info(self) -> Iterator[tuple[str, type]]: ...
-    def column_defs(self, type_map: dict[type, str]) -> Iterator[str]: ...
-    def column_def(self, name: str, cls: type, type_map: dict[type, str]) -> str: ...
-    def create_table(self, strict: bool = False) -> str: ...
-    def insert(self, conflict: ConflictResolutionType = "ABORT") -> str: ...
-    def select(self, predicate: str = "") -> str: ...
-    def update(self, filter: str, fields: dict) -> str: ...
-    def delete(self, predicate: str) -> str: ...
-    def count(self) -> str: ...
-
-
-class DatabaseType[UriType, ConnectionType, CursorType](Protocol):
-    connection: ConnectionType
-
-    @classmethod
-    def connect(cls, uri: UriType) -> Self: ...
-    @contextlib.contextmanager
-    def transact(self) -> Iterator[CursorType]: ...
-    def execute(self, sql: str, params: Sequence | dict) -> CursorType: ...
-    def table[M: ModelType](
-        self, model: type[M], statements: TableStatementsType
-    ) -> "Table[M, Self]": ...
-
-
 type AdapterType[T] = Callable[[T], bytes]
 type ConverterType[T] = Callable[[bytes], T]
-type TypeAdapterMappingType[M] = dict[type[M], TypeAdapter[M]]
-
-TYPEADAPTER_CACHE: TypeAdapterMappingType = {}
-
-
-class DataclassMeta(type):
-    def __new__(cls, name, bases, dct):
-        inst = super().__new__(cls, name, bases, dct)
-        return dataclass(inst)  # type: ignore
+MISSING = object()
+MissingType = type(MISSING)
+JSONB: TypeAlias = Annotated[bytes, "jsonb"]
+INTPK: TypeAlias = Annotated[int, "PRIMARY KEY"]
 
 
-def typeadapter[M](cls: type[M]) -> TypeAdapter[M]:
+TYPEADAPTER_CACHE: dict[type, pydantic.TypeAdapter] = {}
+
+
+def typeadapter[M](model: type[M]) -> pydantic.TypeAdapter[M]:
     try:
-        adapter = TYPEADAPTER_CACHE[cls]
+        return TYPEADAPTER_CACHE[model]
     except KeyError:
-        adapter = TYPEADAPTER_CACHE[cls] = TypeAdapter(cls)
-    return adapter
+        TYPEADAPTER_CACHE[model] = adapter = pydantic.TypeAdapter(model)
+        return adapter
 
 
-class DataclassModel(metaclass=DataclassMeta):
-    __dataclass_fields__: ClassVar[dict[str, Field[Any]]]
-
-    @classmethod
-    def parse(cls, object: Any) -> Self:
-        if isinstance(object, tuple | list):
-            object = {k[0]: v for k, v in zip(cls.fields(), object)}
-        return typeadapter(cls).validate_python(object)
-
-    def to_dict(self) -> dict:
-        cls = type(self)
-        return typeadapter(cls).dump_python(self, mode="json")
-
-    @classmethod
-    def fields(cls) -> Iterator[tuple[str, type]]:
-        for field in fields(cls):
-            yield (field.name, field.type)
+def validate[M](
+    obj: Any,
+    model: type[M],
+) -> M:
+    if isinstance(model, pydantic.BaseModel):
+        if isinstance(obj, (tuple, list)):
+            obj = dict(zip(model.model_fields, obj))
+        return model.model_validate(obj)
+    elif isinstance(model, DataclassLike):
+        if isinstance(obj, (tuple, list)):
+            obj = dict(zip((f.name for f in fields(model)), obj))
+    return typeadapter(model).validate_python(obj)
 
 
-class DataclassStatements[M: ModelType](TableStatementsType):
-    def __init__(self, model: type[M]) -> None:
-        self.model: type[M] = model
+class EZCursor(sqlite3.Cursor):
+    @overload
+    def execute(self, sql: str, *params: Any) -> Self: ...
+    @overload
+    def execute(self, sql: str, **params: Any) -> Self: ...
+    @overload
+    def execute(self, sql: str, param: dict | tuple) -> Self: ...
+    def execute(self, sql: str, *var_params, **kvar_params):
+        params = appbase.statements.extract_param(var_params, kvar_params)
+        return super().execute(sql, params)
 
-    def table_name(self) -> str:
-        return self.model.__name__.casefold()
-
-    def column_info(self) -> Iterator[tuple[str, type]]:
-        yield from self.model.fields()
-
-    def column_defs(
-        self,
-        type_map: dict[type | Any, str] = {
-            str: "TEXT",
-            int: "INTEGER",
-            float: "REAL",
-            bytes: "BLOB",
-            datetime: "DATETIME",
-            timedelta: "TIMEDELTA",
-            Path: "PATH",
-            JSONB: "JSONB",
-        },
-    ) -> Iterator[str]:
-        for name, cls in self.column_info():
-            yield self.column_def(name, cls, type_map)
-
-    def column_def(self, name: str, cls: type, type_map: dict[type, str]) -> str:
-        sqlite_type = None
-        constraints = None
-        not_null = True
-
-        def unpack_type(t):
-            nonlocal sqlite_type, not_null, constraints
-            try:
-                sqlite_type = type_map[t]
-                return
-            except KeyError:
-                pass
-            origin = typing.get_origin(t)
-            if origin is Annotated:
-                match typing.get_args(t):
-                    case (_type, _def):
-                        constraints = _def
-                        unpack_type(_type)
-                        return
-                    case _:
-                        raise TypeError(f"Can only accept one str annotation: {t}")
-            elif origin is UnionType:
-                match typing.get_args(t):
-                    case (_type, types.NoneType) | (types.NoneType, _type):
-                        not_null = False
-                        unpack_type(_type)
-                        return
-                    case _:
-                        raise TypeError(f"Unions not supported, except | None: {t}")
-            elif origin is Literal:
-                first = typing.get_args(origin)[0]
-                unpack_type(type(first))
-
-        unpack_type(cls)
-        parts = [name, sqlite_type, "NOT NULL" if not_null else None, constraints]
-        return " ".join(p for p in parts if p)
-
-    def create_table(self, strict: bool = False) -> str:
-        table = self.table_name()
-        columns = ", ".join(self.column_defs())
-        parts = [f"CREATE TABLE IF NOT EXISTS {table}({columns})"]
-        if strict:
-            parts.append("STRICT")
-        return " ".join(parts) + ";"
-
-    def insert(self, conflict: ConflictResolutionType = "ABORT") -> str:
-        table = self.table_name()
-        names = [name for name, _ in self.column_info()]
-        columns = ", ".join(names)
-        placeholders = ", ".join(f":{name}" for name in names)
-        return f"INSERT OR {conflict} INTO {table}({columns}) VALUES ({placeholders}) RETURNING *;"
-
-    def update(self, filter: dict, fields: dict) -> str:
-        columns = ",".join(f"{name}=:{name}" for name in fields)
-        return f"UPDATE {self.table_name()} SET {columns} WHERE {filter} RETURNING *"
-
-    def delete(self, predicate: str = "") -> str:
-        return f"DELETE FROM {self.table_name()} {predicate} RETURNING *;"
-
-    def count(self) -> str:
-        table = self.table_name()
-        return f"SELECT COUNT(*) FROM {table}"
-
-    def select(self, predicate: str = "") -> str:
-        table = self.table_name()
-        columns = ", ".join(name for name, _ in self.column_info())
-        return f"SELECT {columns} FROM {table} {predicate};"
-
-
-@dataclass
-class Sqlite3Database:
-    uri: str | Path
-    connection: sqlite3.Connection
-    ADAPTERS: ClassVar[dict[type, AdapterType]] = {
-        datetime: lambda dt: dt.astimezone(timezone.utc).isoformat().encode(),
-        Path: Path.__bytes__,
-        timedelta: lambda td: timedelta_isoformat.timedelta.isoformat(td).encode(),
-    }
-    CONVERTERS: ClassVar[dict[str, ConverterType]] = {
-        "datetime": lambda b: datetime.fromisoformat(b.decode()).astimezone(),
-        "path": lambda b: Path(b.decode()),
-        "timedelta": lambda b: timedelta_isoformat.timedelta.fromisoformat(b.decode()),
-    }
-
-    @classmethod
-    def connect(cls, uri: Path | str, echo: bool = True) -> Self:
-        if isinstance(uri, Path):
-            uri.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(
-            uri,
-            autocommit=True,  # type: ignore
-            detect_types=sqlite3.PARSE_DECLTYPES,
-            timeout=30,
-        )
-        if echo:
-            connection.set_trace_callback(print)
-        instance = cls(uri=uri, connection=connection)
-        instance.initialize()
-        return instance
-
-    def initialize(self) -> None:
-        for cls, adapter in self.ADAPTERS.items():
-            sqlite3.register_adapter(cls, adapter)
-        for name, converter in self.CONVERTERS.items():
-            sqlite3.register_converter(name, converter)
-        self.connection.executescript(
-            dedent("""\
-            PRAGMA journal_mode = wal;
-            PRAGMA synchronous = normal;
-            PRAGMA temp_store = memory;
-            PRAGMA mmap_size = 30000000000;
-            PRAGMA cache_size = -32000;
-            PRAGMA foreign_keys = on;
-            PRAGMA auto_vacuum = incremental;
-            PRAGMA foreign_keys = on;
-            PRAGMA secure_delete = on;
-            PRAGMA optimize = 0x10002;
-        """)
-        )
-
-    def finalize(self) -> None:
-        self.connection.executescript(
-            dedent("""\
-            VACUUM;
-            PRAGMA analysis_limit=400;
-            PRAGMA optimize;
-        """)
-        )
-
-    def close(self) -> None:
-        self.finalize()
-        self.connection.close()
-
-    def __del__(self):
+    @contextmanager
+    def transact(self) -> Iterator[Self]:
         try:
-            self.close()
-        except sqlite3.Error:
-            pass
-
-    @contextlib.contextmanager
-    def transact(self) -> Iterator[sqlite3.Cursor]:
-        cursor = self.connection.cursor()
-        try:
-            cursor.execute("BEGIN EXCLUSIVE")
-            yield cursor
-            cursor.execute("COMMIT")
+            self.execute("BEGIN EXCLUSIVE")
+            yield self
+            self.execute("COMMIT")
         except Exception as exc:
-            cursor.execute("ROLLBACK")
+            self.execute("ROLLBACK")
             raise exc
-        finally:
-            cursor.close()
 
-    def execute(
-        self, sql: str, params: Sequence | dict[str, Any] = {}
-    ) -> sqlite3.Cursor:
-        return self.connection.execute(sql, params)
+    def parseone[M](self, model: type[M]) -> M:
+        return validate(self.fetchone(), model)
 
-    def table[M: ModelType](
-        self, model: type[M], statements: TableStatementsType | None = None
-    ) -> "Table[M, Self]":
-        return Table.attach(self, model, statements)
+    def parseall[M](self, model: type[M]) -> list[M]:
+        return list(self.parsed(model))
 
-    tx = transact
-    ex = execute
+    def parsemany[M](self, model: type[M], size: int | None = 1) -> list[M]:
+        return [validate(row, model) for row in self.fetchmany(size)]
 
-    def __enter__(self) -> Self:
-        return self
-
-    def __exit__(self, exc, exc_type, tb) -> None:
-        self.close()
+    def parsed[M](self, model: type[M]) -> Iterator[M]:
+        yield from (validate(row, model) for row in self)
 
 
-@dataclass
-class Cursor[M: ModelType]:
+class ModelCursor[M](EZCursor):
     model: type[M]
-    cursor: sqlite3.Cursor
 
-    def execute(self, sql: str, params: dict | Sequence | M = {}) -> Self:
-        if not isinstance(params, dict | list | tuple):
-            params = params.to_dict()  # type: ignore
-        self.cursor.execute(sql, params)
-        return self
-
-    @property
-    def raw(self) -> sqlite3.Cursor:
-        return self.cursor
-
-    def one(self) -> M | None:
-        row = self.cursor.fetchone()
-        return self.model.parse(row) if row is not None else row
+    def one(self) -> M:
+        return super().parseone(self.model)
 
     def all(self) -> list[M]:
-        return [self.model.parse(row) for row in self.cursor.fetchall()]
+        return super().parseall(self.model)
 
-    def __iter__(self) -> Iterator[M]:
-        yield from (self.model.parse(row) for row in self.cursor)
+    def many(self, size: int | None = 1) -> list[M]:
+        return super().parsemany(self.model, size)
+
+    def iter(self) -> Iterator[M]:
+        yield from super().parsed(self.model)
 
 
-class Table[M: ModelType, D: DatabaseType](metaclass=DataclassMeta):
-    database: D
-    model: type[M]
-    statements: TableStatementsType
-    MODEL: ClassVar[type[ModelType]]
-    STATEMENTS: ClassVar[TableStatementsType]
+class Repository:
+    def __init__(self, connection: sqlite3.Connection | None = None) -> None:
+        self.connection: sqlite3.Connection | None = connection
 
-    @classmethod
-    def connect(
-        cls,
-        uri: str,
-        model: type[M] | None = None,
-        statements: TableStatementsType | None = None,
-        echo: bool = True,
-        **extra: Any,
-    ) -> Self:
-        return cls.attach(
-            Sqlite3Database.connect(uri, echo), model, statements, **extra
+    def cursor(self, connection: sqlite3.Connection | None = None) -> EZCursor:
+        connection = connection or self.connection
+        if connection is None:
+            raise ValueError("Must pass in a connection or cursor at some point.")
+        return connection.cursor(EZCursor)  # type: ignore
+
+    def execute(
+        self,
+        sql: str,
+        *params,
+        connection: sqlite3.Connection | None = None,
+        **kwparams,
+    ) -> EZCursor:
+        return self.cursor(connection).execute(sql, *params, **kwparams)
+
+    def transact(
+        self, connection: sqlite3.Connection | None = None
+    ) -> ContextManager[EZCursor]:
+        return self.cursor(connection).transact()
+
+
+class Table[M: ModelType]:
+    def __init__(
+        self, model: type[M] | None = None, connection: sqlite3.Connection | None = None
+    ) -> None:
+        if model:
+            self.model: type[M] = model
+        elif not hasattr(self, "model"):
+            raise ValueError("Must pass a model or set on subclass.")
+
+        self.connection: sqlite3.Connection | None = connection
+
+    def cursor(self, connection: sqlite3.Connection | None = None) -> ModelCursor[M]:
+        assert self.model is not None
+        connection = connection or self.connection
+        if connection is None:
+            raise ValueError("Must pass in a connection or cursor at some point.")
+        cursor = connection.cursor(ModelCursor)  # type: ignore
+        cursor.model = self.model
+        return cursor
+
+    def ex(
+        self,
+        sql: str,
+        *params,
+        connection: sqlite3.Connection | None = None,
+        **kwparams,
+    ) -> ModelCursor[M]:
+        return self.cursor(connection).execute(sql, *params, **kwparams)
+
+    def tx(
+        self, connection: sqlite3.Connection | None = None
+    ) -> ContextManager[ModelCursor[M]]:
+        return self.cursor(connection).transact()
+
+    def delete(self) -> appbase.statements.Delete[ModelCursor[M]]:
+        return appbase.statements.delete(self.model, cursor=self.cursor())
+
+    def count(self) -> appbase.statements.Count[ModelCursor[M]]:
+        return appbase.statements.count(self.model, cursor=self.cursor())
+
+    def create(self) -> appbase.statements.Create[ModelCursor[M]]:
+        return appbase.statements.create(self.model, cursor=self.cursor())
+
+    def insert(self) -> appbase.statements.Insert[ModelCursor[M]]:
+        return appbase.statements.insert(self.model, cursor=self.cursor())
+
+    def select(self) -> appbase.statements.Select[ModelCursor[M]]:
+        return appbase.statements.select(self.model, cursor=self.cursor())
+
+    def update(self) -> appbase.statements.Update[ModelCursor[M]]:
+        return appbase.statements.update(self.model, cursor=self.cursor())
+
+
+ADAPTERS: dict[type, AdapterType] = {
+    datetime: lambda dt: dt.astimezone(timezone.utc).isoformat().encode(),
+    Path: Path.__bytes__,
+    timedelta: lambda td: timedelta_isoformat.timedelta.isoformat(td).encode(),
+}
+CONVERTERS: dict[str, ConverterType] = {
+    "datetime": lambda b: datetime.fromisoformat(b.decode()),
+    "path": lambda b: Path(b.decode()),
+    "timedelta": lambda b: timedelta_isoformat.timedelta.fromisoformat(b.decode()),
+}
+
+
+@contextmanager
+def connect(
+    uri: str | Path,
+    /,
+    autocommit: bool = True,
+    detect_types: int = sqlite3.PARSE_DECLTYPES,
+    timeout: int = 30,
+    echo: bool = True,
+    adapters: dict[type, AdapterType] = ADAPTERS,
+    converters: dict[str, ConverterType] = CONVERTERS,
+    **kwargs,
+) -> Iterator[sqlite3.Connection]:
+    connection = sqlite3.connect(
+        uri,
+        autocommit=autocommit,  # type: ignore
+        detect_types=detect_types,
+        timeout=timeout,
+        **kwargs,
+    )
+    _initialize_connection(connection, echo, adapters, converters)
+    try:
+        yield connection
+    finally:
+        _finalize_connection(connection)
+        connection.close()
+
+
+def _initialize_connection(
+    connection: sqlite3.Connection,
+    echo: bool,
+    adapters: dict[type, AdapterType],
+    converters: dict[str, ConverterType],
+) -> None:
+    if echo:
+        connection.set_trace_callback(print)
+    for cls, adapter in adapters.items():
+        sqlite3.register_adapter(cls, adapter)
+    for name, converter in converters.items():
+        sqlite3.register_converter(name, converter)
+    connection.executescript(
+        dedent("""\
+        PRAGMA journal_mode = wal;
+        PRAGMA synchronous = normal;
+        PRAGMA temp_store = memory;
+        PRAGMA mmap_size = 30000000000;
+        PRAGMA cache_size = -32000;
+        PRAGMA foreign_keys = on;
+        PRAGMA auto_vacuum = incremental;
+        PRAGMA foreign_keys = on;
+        PRAGMA secure_delete = on;
+        PRAGMA optimize = 0x10002;
+    """)
+    )
+
+
+def _finalize_connection(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        dedent("""\
+        VACUUM;
+        PRAGMA analysis_limit=400;
+        PRAGMA optimize;
+    """)
+    )
+
+
+def test_users():
+    from dataclasses import dataclass
+    import argon2
+
+    _hasher = argon2.PasswordHasher()
+
+    class MkUser(pydantic.BaseModel):
+        email: str
+        password: str = pydantic.Field(min_length=8)
+        created: datetime = pydantic.Field(
+            default_factory=lambda: datetime.now(timezone.utc)
         )
 
-    @classmethod
-    def attach(
-        cls,
-        database: D,
-        model: type[M] | None = None,
-        statements: TableStatementsType | None = None,
-        **extra: Any,
-    ) -> Self:
-        kwargs: dict[str, Any] = dict(database=database)
-        model = model or getattr(cls, "MODEL", None)
-        if model is None:
-            raise Exception(
-                "Must supply model type to __init__ or as classvar on subclass."
-            )
-        kwargs["model"] = model
-        stmts: TableStatementsType = (
-            statements or getattr(cls, "statements", None) or DataclassStatements(model)
-        )
-        kwargs["statements"] = stmts
-        inst = cls(**kwargs, **extra)
-        inst.initialize()
-        return inst
+        @pydantic.computed_field
+        @property
+        def password_hash(self) -> str:
+            return _hasher.hash(self.password)
 
-    def cursor(self) -> Cursor[M]:
-        return Cursor(self.model, self.database.connection.cursor())
+    @dataclass
+    class User:
+        id: INTPK
+        email: str
+        password_hash: str
+        created: datetime
 
-    @contextlib.contextmanager
-    def transact(self) -> Iterator[Cursor[M]]:
-        with self.database.transact() as cursor:
-            yield Cursor(self.model, cursor)
+        def verifypw(self, pw: str) -> bool:
+            return _hasher.verify(self.password_hash, pw)
 
-    def execute(self, sql: str, params: dict | Sequence | M = {}) -> Cursor[M]:
-        return self.cursor().execute(sql, params)
+    class Users(Table[User]):
+        model = User
 
-    def initialize(self) -> None:
-        with self.database.transact() as cursor:
-            cursor.execute(self.statements.create_table())
+    with connect(":memory:") as connection:
+        t = Users(connection=connection)
+        t.create().if_not_exists().execute()
+        mkusers = [
+            MkUser(**data)
+            for data in [
+                {"email": "test1@example.com", "password": "password1"},
+                {"email": "test2@example.com", "password": "password2"},
+                {"email": "test3@example.com", "password": "password3"},
+            ]
+        ]
 
-    def insert(
-        self, param: dict | Sequence | M | None = None, **fields: Any
-    ) -> M | None:
-        if param is None and not fields:
-            raise ValueError("Must pass param object or field kwargs.")
-        with self.transact() as cursor:
-            return cursor.execute(self.statements.insert(), param or fields).one()
+        stmt = t.insert()
 
-    def insert_from(self, stream: Iterable[M]) -> Iterator[M]:
-        for inst in stream:
-            if inst := self.insert(inst):
-                yield inst
+        for mkuser in mkusers:
+            stmt.values(mkuser)
 
-    def get(self, id: int, primary_key_column: str = "rowid") -> M:
-        row = self.select(f"where {primary_key_column}=:id", {"id": id}).one()
-        if row is None:
-            raise ValueError(f"Primary Key {id} not found.")
-        return row
-
-    def rm(self, id: int, primary_key_column: str = "rowid") -> M:
-        predicate = f"WHERE {primary_key_column}=:id"
-        with self.transact() as cursor:
-            row = cursor.execute(self.statements.delete(predicate), {"id": id}).one()
-        if row is None:
-            raise ValueError(f"Primary Key {id} not found.")
-        return row
-
-    def update(self, id: int, fields: dict, primary_key_column: str = "rowid") -> M:
-        filter = f"{primary_key_column}=:id"
-        with self.transact() as cursor:
-            row = cursor.execute(
-                self.statements.update(filter, fields), {"id": id} | fields
-            ).one()
-            if row is None:
-                raise ValueError("Primary key {id} not found.")
-            return row
-
-    def delete(self, predicate: str = "", params: dict[str, Any] = {}) -> Cursor[M]:
-        with self.transact() as cursor:
-            return cursor.execute(self.statements.delete(predicate), params)
-
-    def count(self) -> int:
-        return self.database.connection.execute(self.statements.count()).fetchone()[0]
-
-    def select(self, predicate: str = "", params: dict = {}) -> Cursor[M]:
-        return self.execute(self.statements.select(predicate), params)
-
-    def __iter__(self) -> Iterator[M]:
-        cursor = self.database.connection.execute(self.statements.select())
-        yield from Cursor(self.model, cursor)
-
-
-Database: TypeAlias = Sqlite3Database
-Model: TypeAlias = DataclassModel
+        stmt.execute()
+        assert t.count().execute() == len(mkusers) == len(t.select().execute().all())
