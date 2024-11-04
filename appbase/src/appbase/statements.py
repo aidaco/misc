@@ -214,12 +214,48 @@ class Select[C: sqlite3.Cursor](Statement[C]):
     table: str
     _fields: list[str]
     _where: str | None
+    _groupby: list[str] | None
+    _orderby: list[str] | None
+    _having: str | None
     _offset: int | None
     _limit: int | None
-    _orderby: list[str] | None
+    _param: dict | None
 
-    def where(self, expr: str | None = None) -> Self:
-        self._where = expr
+    @overload
+    def where(self, expr: str | dict) -> Self: ...
+    @overload
+    def where(self, **kwparams) -> Self: ...
+    def where(self, expr: str | dict | None = None, **kwparams):
+        match (expr, kwparams):
+            case (str(), dict()) if not kwparams:
+                self._where = expr
+                return self
+            case (dict(), dict()) if not kwparams:
+                param = extract_param((), expr)
+            case (None, dict()) if kwparams:
+                param = extract_param((), kwparams)
+            case _:
+                raise TypeError("Must pass set expr as str or set params as kwargs")
+        match param:
+            case dict():
+                self._where = " AND ".join(f"{name}=:{name}" for name in param)
+                self._param = (
+                    (self._param | param) if self._param is not None else param
+                )
+            case _:
+                raise TypeError("Must pass update params as dict or kwargs")
+        return self
+
+    def groupby(self, *terms: str) -> Self:
+        self._groupby = list(terms)
+        return self
+
+    def orderby(self, *terms: str) -> Self:
+        self._orderby = list(terms)
+        return self
+
+    def having(self, expr: str | None = None) -> Self:
+        self._having = expr
         return self
 
     def offset(self, value: int | None = None) -> Self:
@@ -230,19 +266,17 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         self._limit = value
         return self
 
-    def orderby(self, *terms: str) -> Self:
-        self._orderby = list(terms)
-        return self
-
     @classmethod
     def from_model(
         cls,
         model: type,
         table: str | None = None,
         where: str | None = None,
+        groupby: list[str] | None = None,
+        orderby: list[str] | None = None,
+        having: str | None = None,
         offset: int | None = None,
         limit: int | None = None,
-        orderby: list[str] | None = None,
         cursor: C | None = None,
     ) -> Self:
         table = table or table_name_for(model)
@@ -252,19 +286,29 @@ class Select[C: sqlite3.Cursor](Statement[C]):
             table=table,
             _fields=fields,
             _where=where,
+            _groupby=groupby,
+            _orderby=orderby,
+            _having=having,
             _offset=offset,
             _limit=limit,
-            _orderby=orderby,
+            _param=None,
         )
 
     def __str__(self) -> str:
         stmt = "SELECT"
         stmt += f" * FROM {self.table}"
         stmt += f" WHERE {self._where}" if self._where else ""
+        stmt += f" GROUP BY {', '.join(self._groupby)}" if self._groupby else ""
+        stmt += f" HAVING {self._having}" if self._having else ""
         stmt += f" ORDER BY {', '.join(self._orderby)}" if self._orderby else ""
         stmt += f" LIMIT {self._limit}" if self._limit else ""
         stmt += f" OFFSET {self._offset}" if self._offset else ""
         return stmt
+
+    def execute(self, *params, cursor: C | None = None, **kwparams) -> C:
+        if self._param:
+            return super().execute(self._param, cursor=cursor)
+        return super().execute(*params, cursor=cursor, **kwparams)
 
 
 @dataclasses.dataclass
@@ -405,43 +449,53 @@ class Update[C: sqlite3.Cursor](Statement[C]):
         )
 
     @overload
-    def set(self, expr: str) -> Self: ...
+    def set(self, expr: str | dict) -> Self: ...
     @overload
-    def set(self, *params, **kwparams) -> Self: ...
-    def set(self, *params, **kwparams):
-        match (params, kwparams):
-            case ((str(expr),), {**kw}) if not kw:
+    def set(self, **kwparams) -> Self: ...
+    def set(self, expr: str | dict | None = None, **kwparams):
+        match (expr, kwparams):
+            case (str(), dict()) if not kwparams:
                 self._set = expr
+                return self
+            case (dict(), dict()) if not kwparams:
+                param = extract_param((), expr)
+            case (None, dict()) if kwparams:
+                param = extract_param((), kwparams)
             case _:
-                param = extract_param(params, kwparams)
-                match param:
-                    case dict():
-                        self._set = ", ".join(f"{name}=:{name}" for name in param)
-                        self._param = (
-                            (self._param | param) if self._param is not None else param
-                        )
-                    case _:
-                        raise TypeError("Must pass update params as dict or kwargs")
+                raise TypeError("Must pass set expr as str or set params as kwargs")
+        match param:
+            case dict():
+                self._set = ", ".join(f"{name}=:{name}" for name in param)
+                self._param = (
+                    (self._param | param) if self._param is not None else param
+                )
+            case _:
+                raise TypeError("Must pass update params as dict or kwargs")
         return self
 
     @overload
-    def where(self, expr: str) -> Self: ...
+    def where(self, expr: str | dict) -> Self: ...
     @overload
-    def where(self, *params, **kwparams) -> Self: ...
-    def where(self, *params, **kwparams):
-        match (params, kwparams):
-            case ((str(expr),), {**kw}) if not kw:
+    def where(self, **kwparams) -> Self: ...
+    def where(self, expr: str | dict | None = None, **kwparams):
+        match (expr, kwparams):
+            case (str(), dict()) if not kwparams:
                 self._where = expr
+                return self
+            case (dict(), dict()) if not kwparams:
+                param = extract_param((), expr)
+            case (None, dict()) if kwparams:
+                param = extract_param((), kwparams)
             case _:
-                param = extract_param(params, kwparams)
-                match param:
-                    case dict():
-                        self._where = " AND ".join(f"{name}=:{name}" for name in param)
-                        self._param = (
-                            (self._param | param) if self._param is not None else param
-                        )
-                    case _:
-                        raise TypeError("Must pass update params as dict or kwargs")
+                raise TypeError("Must pass set expr as str or set params as kwargs")
+        match param:
+            case dict():
+                self._where = " AND ".join(f"{name}=:{name}" for name in param)
+                self._param = (
+                    (self._param | param) if self._param is not None else param
+                )
+            case _:
+                raise TypeError("Must pass update params as dict or kwargs")
         return self
 
     def returning(self, *exprs: str) -> Self:

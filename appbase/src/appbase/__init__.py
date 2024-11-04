@@ -1,4 +1,4 @@
-from appbase.database import Database, Table, Model, JSONB, INTPK, STRPK
+from appbase.database import Repository, Table, JSONB, INTPK
 from appbase.config import ConfigConfig
 import appbase.security as security
 # import appbase.auth.orization as authz
@@ -6,11 +6,8 @@ import appbase.security as security
 
 __all__ = [
     "ConfigConfig",
-    "Database",
     "Table",
-    "Model",
     "JSONB",
     "INTPK",
-    "STRPK",
     "security",
 ]
