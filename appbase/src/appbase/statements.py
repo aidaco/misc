@@ -137,13 +137,8 @@ class Statement[C: sqlite3.Cursor]:
     def execute(self, *, cursor: C | None = None, **params: Any) -> C: ...
     @overload
     def execute(self, param: dict | tuple, *, cursor: C | None = None) -> C: ...
-    def execute(self, *var_params, **kvar_params):
-        match kvar_params:
-            case {"cursor": cursor, **rest} if cursor:
-                kvar_params = rest
-                cursor = cursor
-            case _:
-                cursor = self.cursor
+    def execute(self, *var_params, cursor: C | None = None, **kvar_params):
+        cursor = cursor or self.cursor
         if not cursor:
             raise ValueError("Must provide a cursor.")
         return cursor.execute(str(self), *var_params, **kvar_params)
@@ -408,12 +403,12 @@ class Insert[C: sqlite3.Cursor](Statement[C]):
 
     def execute(self, *params, cursor: C | None = None, **kwparams) -> C:
         match self._param:
-            case tuple() | dict() as param:
-                return super().execute(cursor, param)
-            case list() as params:
+            case tuple() | dict() as p:
+                return super().execute(p, cursor=cursor)
+            case list() as ps:
                 cursor = cursor or self.cursor
                 assert cursor
-                return cursor.executemany(str(self), params)
+                return cursor.executemany(str(self), ps)
             case _:
                 return super().execute(*params, cursor=cursor, **kwparams)
 
