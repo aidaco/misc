@@ -12,12 +12,13 @@ from typing import (
     TextIO,
     TypeAlias,
     runtime_checkable,
+    overload,
 )
 import json
 import typing
 
 from pydantic import BaseModel, TypeAdapter
-import appdirs
+import platformdirs
 import toml
 import yaml
 
@@ -141,13 +142,13 @@ Model: TypeAlias = BaseModel
 
 @runtime_checkable
 class RSourceType(Protocol):
-    def load(self) -> dict: ...
+    def load(self) -> Mapping[str, Any]: ...
 
 
 @runtime_checkable
 class RWSourceType(Protocol):
-    def load(self) -> dict: ...
-    def dump(self, data: dict) -> None: ...
+    def load(self) -> Mapping[str, Any]: ...
+    def dump(self, data: Mapping[str, Any]) -> None: ...
 
 
 SourceType: TypeAlias = RSourceType | RWSourceType
@@ -170,13 +171,13 @@ class StrSource:
 
 
 @dataclass
-class DictSource:
-    data: dict
+class MappingSource:
+    data: Mapping
 
-    def load(self) -> dict:
+    def load(self) -> Mapping:
         return self.data
 
-    def dump(self, data: dict) -> None:
+    def dump(self, data: Mapping) -> None:
         self.data = data
 
 
@@ -193,7 +194,7 @@ class PathSource:
 
 
 @dataclass
-class AppdirsSource:
+class PlatformdirsSource:
     name: str
 
     @property
@@ -202,11 +203,13 @@ class AppdirsSource:
 
     @property
     def configdir(self) -> Path:
-        return Path(appdirs.user_config_dir(self.name)).resolve()
+        return Path(
+            platformdirs.user_config_dir(self.name, ensure_exists=True)
+        ).resolve()
 
     @property
     def datadir(self) -> Path:
-        return Path(appdirs.user_data_dir(self.name)).resolve()
+        return Path(platformdirs.user_data_dir(self.name, ensure_exists=True)).resolve()
 
     def load(self, format: Format | None = None, path: Path | None = None) -> dict:
         return load_path(path or self.configpath, format)
@@ -245,34 +248,6 @@ class ConfigConfig[S: SourceType]:
             key: self.section_to_dict(key) for key in self.section_instances
         }
 
-    @classmethod
-    def load(cls, source: SourceType) -> Self:
-        return cls(source, source.load())
-
-    @classmethod
-    def load_from(
-        cls,
-        *,
-        name: str | None = None,
-        path: Path | None = None,
-        text: str | None = None,
-        format: Format | None = None,
-        map: dict | None = None,
-    ) -> Self:
-        src: SourceType
-        if name:
-            src = AppdirsSource(name)
-        elif path:
-            src = PathSource(path, format)
-        elif text:
-            assert format is not None
-            src = StrSource(text, format)
-        elif map:
-            src = DictSource(map)
-        else:
-            raise ValueError("Must pass a kwarg.")
-        return cls.load(src)
-
     def dump(self, source: SourceType | None = None) -> None:
         src = source or self.source
         match src:
@@ -301,3 +276,36 @@ class ConfigConfig[S: SourceType]:
         inst = self.get_root()
         self.root_instance = inst
         return inst
+
+
+def load[S: SourceType](source: S) -> ConfigConfig[S]:
+    return ConfigConfig(source, source.load())
+
+
+@overload
+def load_from(*, name: str) -> ConfigConfig[PlatformdirsSource]: ...
+@overload
+def load_from(*, path: Path, format: Format = "toml") -> ConfigConfig[PathSource]: ...
+@overload
+def load_from(*, text: str, format: Format = "toml") -> ConfigConfig[StrSource]: ...
+@overload
+def load_from(*, mapping: Mapping) -> ConfigConfig[MappingSource]: ...
+def load_from(
+    *,
+    name: str | None = None,
+    path: Path | None = None,
+    text: str | None = None,
+    mapping: Mapping[str, Any] | None = None,
+    format: Format | None = None,
+) -> ConfigConfig:
+    if name:
+        src = PlatformdirsSource(name)
+    elif path:
+        src = PathSource(path, format)
+    elif text and format:
+        src = StrSource(text, format)
+    elif mapping:
+        src = MappingSource(mapping)
+    else:
+        raise ValueError("Must pass a kwarg.")
+    return load(src)

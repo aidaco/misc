@@ -15,7 +15,7 @@ authors = [
 ]
 dependencies = [
   "rich",
-  "appdirs",
+  "platformdirs",
   "PyYAML",
   "toml",
   "pydantic",

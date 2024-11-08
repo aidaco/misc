@@ -1,6 +1,7 @@
+from dataclasses import dataclass, field
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
-from typing import Annotated
+from typing import Annotated, Self
 from urllib.parse import quote
 from pathlib import Path
 
@@ -10,8 +11,14 @@ import jinja2
 import uvicorn
 
 import appbase
+from appbase.database import Table, INTPK
 
-confconf = appbase.ConfigConfig.load_from(name="call_log")
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+confconf = appbase.config.load_from(name="call_log")
 
 
 @confconf.root
@@ -30,32 +37,48 @@ class config:
     uri: str | Path = rootconfig.datadir / "call_log.sqlite3"
 
 
-class User(appbase.Model):
-    id: appbase.INTPK
+@dataclass
+class MkUser:
+    name: str
+    password: str
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime | None = None
+
+    @property
+    def password_hash(self) -> str:
+        return appbase.security.hash_password(self.password)
+
+
+@dataclass
+class User:
+    id: INTPK
     name: str
     password_hash: str
     created_at: datetime
     updated_at: datetime | None
 
+    @classmethod
+    def table(cls) -> Table[Self]:
+        return Table(cls)
 
-class UserStore(appbase.Table[User, appbase.Database]):
-    MODEL = User
-
-    def insert(  # type: ignore
-        self,
-        name: str,
-        password: str,
-    ) -> User | None:
-        return super().insert(
-            (
-                name,
-                appbase.security.hash_password(password),
-                datetime.now(timezone.utc),
+    @classmethod
+    def create(cls, name: str, password: str) -> Self:
+        return (
+            cls.table()
+            .insert()
+            .values(
+                name=name,
+                password_hash=appbase.security.hash_password(password),
+                created_at=utcnow(),
             )
+            .returning("*")
+            .execute()
+            .one()
         )
 
-    def login(self, name: str, password: str) -> User:
-        row = self.select("WHERE name=:name", {"name": name}).one()
+    @classmethod
+    def login(cls, name: str, password: str) -> Self:
+        row = cls.table().select().where(name=name).execute().one()
         if row is None or not appbase.security.verify_password(
             password, row.password_hash
         ):
@@ -63,8 +86,9 @@ class UserStore(appbase.Table[User, appbase.Database]):
         return row
 
 
-class Call(appbase.Model):
-    id: appbase.INTPK
+@dataclass
+class Call:
+    id: INTPK
     received_at: datetime
     received_by_id: int
     number: str
@@ -73,32 +97,42 @@ class Call(appbase.Model):
     created_at: datetime
     updated_at: datetime | None
 
+    @classmethod
+    def table(cls) -> Table[Self]:
+        return Table(cls)
 
-class CallStore(appbase.Table[Call, appbase.Database]):
-    MODEL = Call
-
-    def insert(  # type: ignore
-        self,
+    @classmethod
+    def create(
+        cls,
         received_at: datetime,
         received_by: User,
         number: str,
         caller: str,
         notes: str,
-    ) -> Call | None:
-        return super().insert(
-            {
-                "received_at": received_at,
-                "received_by_id": received_by.id,
-                "number": number,
-                "caller": caller,
-                "notes": notes,
-                "created_at": datetime.now(timezone.utc),
-            }
+    ) -> Self:
+        return (
+            cls.table()
+            .insert()
+            .values(
+                received_at=received_at,
+                received_by_id=received_by.id,
+                number=number,
+                caller=caller,
+                notes=notes,
+                created_at=utcnow(),
+            )
+            .execute()
+            .one()
         )
 
+    @classmethod
+    def get(cls, id: int) -> Self:
+        return cls.table().select().where(id=id).execute().one()
 
-class Task(appbase.Model):
-    id: appbase.INTPK
+
+@dataclass
+class Task:
+    id: INTPK
     user_id: int
     call_id: int | None
     name: str
@@ -107,25 +141,31 @@ class Task(appbase.Model):
     updated_at: datetime | None
     completed_at: datetime | None
 
+    @classmethod
+    def table(cls) -> Table[Self]:
+        return Table(cls)
 
-class TaskStore(appbase.Table[Task, appbase.Database]):
-    MODEL = Task
-
-    def insert(  # type: ignore
-        self,
+    @classmethod
+    def create(
+        cls,
         user: User,
         call: Call | None,
         name: str,
         notes: str,
-    ) -> Task | None:
-        return super().insert(
-            {
-                "user_id": user.id,
-                "call_id": None if call is None else call.id,
-                "name": name,
-                "notes": notes,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
+    ) -> Self:
+        return (
+            cls.table()
+            .insert()
+            .values(
+                user_id=user.id,
+                call_id=None if call is None else call.id,
+                name=name,
+                notes=notes,
+                created_at=utcnow(),
+            )
+            .returning("*")
+            .execute()
+            .one()
         )
 
 

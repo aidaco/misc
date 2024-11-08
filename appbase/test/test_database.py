@@ -1,8 +1,8 @@
 import appbase
-import appbase.database
 import pydantic
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 
 
 def utcnow() -> datetime:
@@ -10,10 +10,11 @@ def utcnow() -> datetime:
 
 
 def test_users():
-    from dataclasses import dataclass
-    import argon2
+    def hashpw_unsafe(pw: str) -> str:
+        return hashlib.md5(pw.encode()).hexdigest()
 
-    _hasher = argon2.PasswordHasher()
+    def verifypw_unsafe(pw: str, hash: str) -> bool:
+        return hashpw_unsafe(pw) == hash
 
     class MkUser(pydantic.BaseModel):
         email: str
@@ -23,19 +24,19 @@ def test_users():
         @pydantic.computed_field
         @property
         def password_hash(self) -> str:
-            return _hasher.hash(self.password)
+            return hashpw_unsafe(self.password)
 
     @dataclass
     class User:
-        id: appbase.INTPK
+        id: appbase.database.INTPK
         email: str
         password_hash: str
         created: datetime
 
         def verifypw(self, pw: str) -> bool:
-            return _hasher.verify(self.password_hash, pw)
+            return verifypw_unsafe(self.password_hash, pw)
 
-    class Users(appbase.Table[User]):
+    class Users(appbase.database.Table[User]):
         model = User
 
     with appbase.database.connect(":memory:") as connection:
