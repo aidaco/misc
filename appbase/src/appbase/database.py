@@ -87,7 +87,8 @@ class EZCursor(sqlite3.Cursor):
             raise exc
 
     def parseone[M](self, model: type[M]) -> M | None:
-        return validate(self.fetchone(), model)
+        row = self.fetchone()
+        return row if row is None else validate(row, model)
 
     def parseall[M](self, model: type[M]) -> list[M]:
         return list(self.parsed(model))
