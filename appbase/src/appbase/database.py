@@ -99,6 +99,12 @@ class EZCursor(sqlite3.Cursor):
     def parsed[M](self, model: type[M]) -> Iterator[M]:
         yield from (validate(row, model) for row in self)
 
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc, exc_type, exc_tb) -> None:
+        self.close()
+
 
 class ModelCursor[M](EZCursor):
     model: type[M]
