@@ -13,7 +13,7 @@ from typing import (
     ClassVar,
     runtime_checkable,
 )
-from dataclasses import fields
+from dataclasses import fields, dataclass
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +30,12 @@ class DataclassLike(Protocol):
     __dataclass_fields__: ClassVar[dict]
 
 
+@runtime_checkable
+class ConnectionHolder(Protocol):
+    connection: sqlite3.Connection
+
+
+type ConnectionType = sqlite3.Connection | ConnectionHolder
 type ModelType = pydantic.BaseModel | DataclassLike
 type ConflictResolutionType = Literal["ABORT", "ROLLBACK", "FAIL", "IGNORE", "REPLACE"]
 type AdapterType[T] = Callable[[T], bytes]
@@ -142,20 +148,27 @@ class Repository:
 
 class Table[M: ModelType]:
     def __init__(
-        self, model: type[M] | None = None, connection: sqlite3.Connection | None = None
+        self, model: type[M] | None = None, connection: ConnectionType | None = None
     ) -> None:
         if model:
             self.model: type[M] = model
         elif not hasattr(self, "model"):
             raise ValueError("Must pass a model or set on subclass.")
 
-        self.connection: sqlite3.Connection | None = connection
+        self.connection: ConnectionType | None = connection
 
     def cursor(self, connection: sqlite3.Connection | None = None) -> ModelCursor[M]:
         assert self.model is not None
-        connection = connection or self.connection
         if connection is None:
-            raise ValueError("Must pass in a connection or cursor at some point.")
+            match self.connection:
+                case sqlite3.Connection():
+                    connection = self.connection
+                case ConnectionHolder():
+                    connection = self.connection.connection
+                case _:
+                    raise ValueError(
+                        "Must pass in a connection or cursor at some point."
+                    )
         cursor = connection.cursor(ModelCursor)  # type: ignore
         cursor.model = self.model
         return cursor
@@ -205,31 +218,45 @@ CONVERTERS: dict[str, ConverterType] = {
 }
 
 
-@contextmanager
-def connect(
+@dataclass
+class Connection:
+    uri: str | Path
+    autocommit: bool = True
+    detect_types: int = sqlite3.PARSE_DECLTYPES
+    timeout: int = 30
+    echo: bool = True
+    adapters: dict[type, AdapterType] = ADAPTERS
+    converters: dict[str, ConverterType] = CONVERTERS
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        try:
+            return self._connection
+        except AttributeError:
+            self._connection: sqlite3.Connection = _connect(
+                self.uri, self.autocommit, self.detect_types, self.timeout
+            )
+            _initialize_connection(
+                self._connection, self.echo, self.adapters, self.converters
+            )
+            return self._connection
+
+
+def _connect(
     uri: str | Path,
     /,
     autocommit: bool = True,
     detect_types: int = sqlite3.PARSE_DECLTYPES,
     timeout: int = 30,
-    echo: bool = True,
-    adapters: dict[type, AdapterType] = ADAPTERS,
-    converters: dict[str, ConverterType] = CONVERTERS,
     **kwargs,
-) -> Iterator[sqlite3.Connection]:
-    connection = sqlite3.connect(
+) -> sqlite3.Connection:
+    return sqlite3.connect(
         uri,
         autocommit=autocommit,  # type: ignore
         detect_types=detect_types,
         timeout=timeout,
         **kwargs,
     )
-    _initialize_connection(connection, echo, adapters, converters)
-    try:
-        yield connection
-    finally:
-        _finalize_connection(connection)
-        connection.close()
 
 
 def _initialize_connection(
@@ -268,3 +295,26 @@ def _finalize_connection(connection: sqlite3.Connection) -> None:
         PRAGMA optimize;
     """)
     )
+
+
+@contextmanager
+def connect(
+    uri: str | Path,
+    /,
+    autocommit: bool = True,
+    detect_types: int = sqlite3.PARSE_DECLTYPES,
+    timeout: int = 30,
+    echo: bool = True,
+    adapters: dict[type, AdapterType] = ADAPTERS,
+    converters: dict[str, ConverterType] = CONVERTERS,
+    **kwargs,
+) -> Iterator[sqlite3.Connection]:
+    connection = _connect(
+        uri, autocommit=autocommit, detect_types=detect_types, timeout=timeout, **kwargs
+    )
+    _initialize_connection(connection, echo, adapters, converters)
+    try:
+        yield connection
+    finally:
+        _finalize_connection(connection)
+        connection.close()

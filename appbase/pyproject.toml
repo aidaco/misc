@@ -21,12 +21,15 @@ dependencies = [
   "pydantic",
   "cyclopts",
   "timedelta-isoformat",
+  "argon2-cffi",
+  "PyJWT",
+  "requests",
+  "python-multipart",
+  "fastapi",
+  "uvicorn"
 ]
 
 [project.optional-dependencies]
-api = [ "fastapi", "uvicorn" ]
-web = [ "requests", "python-multipart" ]
-security = [ "PyJWT", "argon2-cffi", "pywebpush", "py_vapid" ]
 dev = ["pre-commit", "pyright", "ruff", "mypy", "types-requests", "types-toml"]
 test = ["pytest", "coverage"]
 
