@@ -67,14 +67,21 @@ def validate[M](
 
 class EZCursor(sqlite3.Cursor):
     @overload
+    def execute(self, sql: appbase.statements.Statement) -> Self: ...
+    @overload
     def execute(self, sql: str, *params: Any) -> Self: ...
     @overload
     def execute(self, sql: str, **params: Any) -> Self: ...
     @overload
     def execute(self, sql: str, param: dict | tuple) -> Self: ...
-    def execute(self, sql: str, *var_params, **kvar_params):
-        params = appbase.statements.extract_param(var_params, kvar_params)
-        return super().execute(sql, params)
+    def execute(self, sql, *var_params, **kvar_params):
+        if isinstance(sql, appbase.statements.Statement) and (
+            exec := getattr(sql, "execute", None)
+        ):
+            return exec(self)
+        else:
+            params = appbase.statements.extract_param(var_params, kvar_params)
+            return super().execute(str(sql), params)
 
     @contextmanager
     def transact(self) -> Iterator[Self]:
@@ -148,57 +155,35 @@ class Repository:
 
 
 class Table[M: ModelType]:
-    def __init__(
-        self, model: type[M] | None = None, connection: sqlite3.Connection | None = None
-    ) -> None:
+    def __init__(self, model: type[M] | None = None) -> None:
         if model:
             self.model: type[M] = model
         elif not hasattr(self, "model"):
             raise ValueError("Must pass a model or set on subclass.")
 
-        self.connection: sqlite3.Connection | None = connection
-
-    def cursor(self, connection: sqlite3.Connection | None = None) -> ModelCursor[M]:
+    def cursor(self, connection: sqlite3.Connection) -> ModelCursor[M]:
         assert self.model is not None
-        if connection is None:
-            connection = self.connection
-        if connection is None:
-            raise ValueError("Must pass in a connection or cursor at some point.")
         cursor = connection.cursor(ModelCursor)  # type: ignore
         cursor.model = self.model
         return cursor
 
-    def ex(
-        self,
-        sql: str,
-        *params,
-        connection: sqlite3.Connection | None = None,
-        **kwparams,
-    ) -> ModelCursor[M]:
-        return self.cursor(connection).execute(sql, *params, **kwparams)
+    def delete(self) -> appbase.statements.Delete:
+        return appbase.statements.delete(self.model)
 
-    def tx(
-        self, connection: sqlite3.Connection | None = None
-    ) -> ContextManager[ModelCursor[M]]:
-        return self.cursor(connection).transact()
+    def count(self) -> appbase.statements.Count:
+        return appbase.statements.count(self.model)
 
-    def delete(self) -> appbase.statements.Delete[ModelCursor[M]]:
-        return appbase.statements.delete(self.model, cursor=self.cursor())
+    def create(self) -> appbase.statements.Create:
+        return appbase.statements.create(self.model)
 
-    def count(self) -> appbase.statements.Count[ModelCursor[M]]:
-        return appbase.statements.count(self.model, cursor=self.cursor())
+    def insert(self) -> appbase.statements.Insert:
+        return appbase.statements.insert(self.model)
 
-    def create(self) -> appbase.statements.Create[ModelCursor[M]]:
-        return appbase.statements.create(self.model, cursor=self.cursor())
+    def select(self) -> appbase.statements.Select:
+        return appbase.statements.select(self.model)
 
-    def insert(self) -> appbase.statements.Insert[ModelCursor[M]]:
-        return appbase.statements.insert(self.model, cursor=self.cursor())
-
-    def select(self) -> appbase.statements.Select[ModelCursor[M]]:
-        return appbase.statements.select(self.model, cursor=self.cursor())
-
-    def update(self) -> appbase.statements.Update[ModelCursor[M]]:
-        return appbase.statements.update(self.model, cursor=self.cursor())
+    def update(self) -> appbase.statements.Update:
+        return appbase.statements.update(self.model)
 
 
 ADAPTERS: dict[type, AdapterType] = {

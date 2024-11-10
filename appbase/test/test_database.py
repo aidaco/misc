@@ -36,12 +36,12 @@ def test_users():
         def verifypw(self, pw: str) -> bool:
             return verifypw_unsafe(self.password_hash, pw)
 
-    class Users(appbase.database.Table[User]):
-        model = User
-
-    with appbase.database.connect(":memory:") as connection:
-        t = Users(connection=connection)
-        t.create().if_not_exists().execute()
+    t = appbase.database.Table(User)
+    with (
+        appbase.database.lifespan(":memory:") as connection,
+        t.cursor(connection) as cursor,
+    ):
+        cursor.execute(t.create().if_not_exists())
         mkusers = [
             MkUser.model_validate(data)
             for data in [
@@ -56,5 +56,9 @@ def test_users():
         for mkuser in mkusers:
             stmt.values(mkuser)
 
-        stmt.execute()
-        assert t.count().execute() == len(mkusers) == len(t.select().execute().all())
+        cursor.execute(stmt)
+        assert (
+            cursor.execute(t.count())
+            == len(mkusers)
+            == len(cursor.execute(t.select()).all())
+        )
