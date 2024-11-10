@@ -86,7 +86,7 @@ class EZCursor(sqlite3.Cursor):
             self.execute("ROLLBACK")
             raise exc
 
-    def parseone[M](self, model: type[M]) -> M:
+    def parseone[M](self, model: type[M]) -> M | None:
         return validate(self.fetchone(), model)
 
     def parseall[M](self, model: type[M]) -> list[M]:
@@ -102,7 +102,7 @@ class EZCursor(sqlite3.Cursor):
 class ModelCursor[M](EZCursor):
     model: type[M]
 
-    def one(self) -> M:
+    def one(self) -> M | None:
         return super().parseone(self.model)
 
     def all(self) -> list[M]:
