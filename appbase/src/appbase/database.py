@@ -218,45 +218,29 @@ CONVERTERS: dict[str, ConverterType] = {
 }
 
 
-@dataclass
-class Connection:
-    uri: str | Path
-    autocommit: bool = True
-    detect_types: int = sqlite3.PARSE_DECLTYPES
-    timeout: int = 30
-    echo: bool = True
-    adapters: dict[type, AdapterType] = ADAPTERS
-    converters: dict[str, ConverterType] = CONVERTERS
-
-    @property
-    def connection(self) -> sqlite3.Connection:
-        try:
-            return self._connection
-        except AttributeError:
-            self._connection: sqlite3.Connection = _connect(
-                self.uri, self.autocommit, self.detect_types, self.timeout
-            )
-            _initialize_connection(
-                self._connection, self.echo, self.adapters, self.converters
-            )
-            return self._connection
-
-
-def _connect(
+def connect(
     uri: str | Path,
     /,
     autocommit: bool = True,
     detect_types: int = sqlite3.PARSE_DECLTYPES,
     timeout: int = 30,
+    echo: bool = True,
+    adapters: dict[type, AdapterType] = ADAPTERS,
+    converters: dict[str, ConverterType] = CONVERTERS,
     **kwargs,
 ) -> sqlite3.Connection:
-    return sqlite3.connect(
+    connection = sqlite3.connect(
         uri,
         autocommit=autocommit,  # type: ignore
         detect_types=detect_types,
         timeout=timeout,
         **kwargs,
     )
+
+    _initialize_connection(
+        connection, echo=echo, adapters=adapters, converters=converters
+    )
+    return connection
 
 
 def _initialize_connection(
@@ -298,7 +282,7 @@ def _finalize_connection(connection: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def connect(
+def lifespan(
     uri: str | Path,
     /,
     autocommit: bool = True,
@@ -309,10 +293,16 @@ def connect(
     converters: dict[str, ConverterType] = CONVERTERS,
     **kwargs,
 ) -> Iterator[sqlite3.Connection]:
-    connection = _connect(
-        uri, autocommit=autocommit, detect_types=detect_types, timeout=timeout, **kwargs
+    connection = connect(
+        uri,
+        autocommit=autocommit,
+        detect_types=detect_types,
+        timeout=timeout,
+        echo=echo,
+        adapters=adapters,
+        converters=converters,
+        **kwargs,
     )
-    _initialize_connection(connection, echo, adapters, converters)
     try:
         yield connection
     finally:
