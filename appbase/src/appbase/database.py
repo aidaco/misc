@@ -13,7 +13,7 @@ from typing import (
     ClassVar,
     runtime_checkable,
 )
-from dataclasses import fields, dataclass
+from dataclasses import fields
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,12 +30,6 @@ class DataclassLike(Protocol):
     __dataclass_fields__: ClassVar[dict]
 
 
-@runtime_checkable
-class ConnectionHolder(Protocol):
-    connection: sqlite3.Connection
-
-
-type ConnectionType = sqlite3.Connection | ConnectionHolder
 type ModelType = pydantic.BaseModel | DataclassLike
 type ConflictResolutionType = Literal["ABORT", "ROLLBACK", "FAIL", "IGNORE", "REPLACE"]
 type AdapterType[T] = Callable[[T], bytes]
@@ -148,27 +142,21 @@ class Repository:
 
 class Table[M: ModelType]:
     def __init__(
-        self, model: type[M] | None = None, connection: ConnectionType | None = None
+        self, model: type[M] | None = None, connection: sqlite3.Connection | None = None
     ) -> None:
         if model:
             self.model: type[M] = model
         elif not hasattr(self, "model"):
             raise ValueError("Must pass a model or set on subclass.")
 
-        self.connection: ConnectionType | None = connection
+        self.connection: sqlite3.Connection | None = connection
 
     def cursor(self, connection: sqlite3.Connection | None = None) -> ModelCursor[M]:
         assert self.model is not None
         if connection is None:
-            match self.connection:
-                case sqlite3.Connection():
-                    connection = self.connection
-                case ConnectionHolder():
-                    connection = self.connection.connection
-                case _:
-                    raise ValueError(
-                        "Must pass in a connection or cursor at some point."
-                    )
+            connection = self.connection
+        if connection is None:
+            raise ValueError("Must pass in a connection or cursor at some point.")
         cursor = connection.cursor(ModelCursor)  # type: ignore
         cursor.model = self.model
         return cursor
