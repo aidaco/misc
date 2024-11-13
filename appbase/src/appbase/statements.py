@@ -126,19 +126,22 @@ def extract_param(params: tuple, kwparams: dict) -> tuple | dict:
             raise ValueError(f"Invalid parameters: {params}")
 
 
-class Statement:
+@dataclasses.dataclass
+class Statement[C: sqlite3.Cursor]:
+    cursor: C
+
     @overload
-    def execute[C: sqlite3.Cursor](self, cursor: C, param: dict | tuple) -> C: ...
+    def execute(self, param: dict | tuple) -> C: ...
     @overload
-    def execute[C: sqlite3.Cursor](self, cursor: C, *params: Any) -> C: ...
+    def execute(self, *params: Any) -> C: ...
     @overload
-    def execute[C: sqlite3.Cursor](self, cursor: C, **kwparams: Any) -> C: ...
-    def execute(self, cursor, *var_params, **kvar_params):
-        return cursor.execute(str(self), *var_params, **kvar_params)
+    def execute(self, **kwparams: Any) -> C: ...
+    def execute(self, *var_params, **kvar_params):
+        return self.cursor.execute(str(self), *var_params, **kvar_params)
 
 
 @dataclasses.dataclass
-class Create(Statement):
+class Create[C: sqlite3.Cursor](Statement[C]):
     table: str
     columns: list[ColumnDef]
     table_contraints: list[str]
@@ -149,6 +152,7 @@ class Create(Statement):
     @classmethod
     def from_model(
         cls,
+        cursor: C,
         model: type,
         if_not_exists: bool = False,
         strict: bool = False,
@@ -160,6 +164,7 @@ class Create(Statement):
             for name, annotation in annotations_from(model)
         ]
         return cls(
+            cursor=cursor,
             table=table,
             columns=columns,
             table_contraints=[],
@@ -196,7 +201,7 @@ class Create(Statement):
 
 
 @dataclasses.dataclass
-class Select(Statement):
+class Select[C: sqlite3.Cursor](Statement[C]):
     table: str
     _fields: list[str]
     _where: str | None
@@ -255,6 +260,7 @@ class Select(Statement):
     @classmethod
     def from_model(
         cls,
+        cursor: C,
         model: type,
         table: str | None = None,
         where: str | None = None,
@@ -267,6 +273,7 @@ class Select(Statement):
         table = table or table_name_for(model)
         fields = [name for name, _ in annotations_from(model)]
         return cls(
+            cursor=cursor,
             table=table,
             _fields=fields,
             _where=where,
@@ -289,14 +296,14 @@ class Select(Statement):
         stmt += f" OFFSET {self._offset}" if self._offset else ""
         return stmt
 
-    def execute[C: sqlite3.Cursor](self, cursor: C, *params, **kwparams) -> C:
+    def execute(self, *params, **kwparams) -> C:
         if self._param:
-            return super().execute(cursor, self._param)
-        return super().execute(cursor, *params, **kwparams)
+            return super().execute(self._param)
+        return super().execute(*params, **kwparams)
 
 
 @dataclasses.dataclass
-class Insert(Statement):
+class Insert[C: sqlite3.Cursor](Statement[C]):
     table: str
     conflict_resolution: ConflictResolutionType | None
     columns: list[str]
@@ -307,6 +314,7 @@ class Insert(Statement):
     @classmethod
     def from_model(
         cls,
+        cursor: C,
         model: type,
         conflict_resolution: ConflictResolutionType | None = None,
         columns: list[str] | None = None,
@@ -320,6 +328,7 @@ class Insert(Statement):
             else [name for name, _ in annotations_from(model)]
         )
         return cls(
+            cursor=cursor,
             table=table,
             conflict_resolution=conflict_resolution,
             columns=cols,
@@ -388,18 +397,18 @@ class Insert(Statement):
             stmt += f" RETURNING {returning}"
         return stmt
 
-    def execute[C: sqlite3.Cursor](self, cursor: C, *params, **kwparams) -> C:
+    def execute(self, *params, **kwparams) -> C:
         match self._param:
             case tuple() | dict() as p:
-                return super().execute(cursor, p)
+                return super().execute(p)
             case list() as ps:
-                return cursor.executemany(str(self), ps)
+                return self.cursor.executemany(str(self), ps)
             case _:
-                return super().execute(cursor, *params, **kwparams)
+                return super().execute(*params, **kwparams)
 
 
 @dataclasses.dataclass
-class Update(Statement):
+class Update[C: sqlite3.Cursor](Statement[C]):
     _table: str
     _conflict_resolution: ConflictResolutionType | None
     _set: str | None
@@ -410,6 +419,7 @@ class Update(Statement):
     @classmethod
     def from_model(
         cls,
+        cursor: C,
         model: type,
         conflict_resolution: ConflictResolutionType | None = None,
         set: str | None = None,
@@ -418,6 +428,7 @@ class Update(Statement):
     ) -> Self:
         table = table_name_for(model)
         return cls(
+            cursor=cursor,
             _table=table,
             _conflict_resolution=conflict_resolution,
             _set=set,
@@ -492,14 +503,14 @@ class Update(Statement):
         stmt += f" RETURNING {', '.join(self._returning)}" if self._returning else ""
         return stmt
 
-    def execute[C: sqlite3.Cursor](self, cursor: C, *params, **kwparams) -> C:
+    def execute(self, *params, **kwparams) -> C:
         if self._param:
-            return super().execute(cursor, self._param)
-        return super().execute(cursor, *params, **kwparams)
+            return super().execute(self._param)
+        return super().execute(*params, **kwparams)
 
 
 @dataclasses.dataclass
-class Delete(Statement):
+class Delete[C: sqlite3.Cursor](Statement[C]):
     table: str
     _where: str | None
     _returning: list[str] | None
@@ -507,12 +518,13 @@ class Delete(Statement):
     @classmethod
     def from_model(
         cls,
+        cursor: C,
         model: type,
         where: str | None = None,
         returning: list[str] | None = None,
     ) -> Self:
         table = table_name_for(model)
-        return cls(table=table, _where=where, _returning=returning)
+        return cls(cursor=cursor, table=table, _where=where, _returning=returning)
 
     def where(self, expr: str) -> Self:
         self._where = expr
@@ -530,40 +542,46 @@ class Delete(Statement):
 
 
 @dataclasses.dataclass
-class Count(Statement):
+class Count[C: sqlite3.Cursor](Statement[C]):
     table: str
 
     @classmethod
-    def from_model(cls, model: type) -> Self:
+    def from_model(cls, cursor: C, model: type) -> Self:
         table = table_name_for(model)
-        return cls(table=table)
+        return cls(cursor=cursor, table=table)
 
     def __str__(self) -> str:
         return f"SELECT COUNT(*) FROM {self.table}"
 
-    def execute(self, cursor: sqlite3.Cursor) -> int:
-        return super().execute(cursor=cursor).fetchone()[0]
+    def execute(self, *args, **kwargs) -> C:
+        return super().execute()
+
+    def get(self) -> int:
+        return self.execute().fetchone()[0]
 
 
-def delete(
+def delete[C: sqlite3.Cursor](
+    cursor: C,
     model: type,
     where: str | None = None,
     returning: list[str] | None = None,
-) -> Delete:
-    return Delete.from_model(model, where, returning)
+) -> Delete[C]:
+    return Delete.from_model(cursor, model, where, returning)
 
 
-def count(model: type) -> Count:
-    return Count.from_model(model)
+def count[C: sqlite3.Cursor](cursor: C, model: type) -> Count[C]:
+    return Count.from_model(cursor, model)
 
 
-def create(
+def create[C: sqlite3.Cursor](
+    cursor: C,
     model: type,
     if_not_exists: bool = False,
     strict: bool = False,
     without_rowid: bool = False,
-) -> Create:
+) -> Create[C]:
     return Create.from_model(
+        cursor=cursor,
         model=model,
         if_not_exists=if_not_exists,
         strict=strict,
@@ -571,14 +589,16 @@ def create(
     )
 
 
-def insert(
+def insert[C: sqlite3.Cursor](
+    cursor: C,
     model: type,
     conflict_resolution: ConflictResolutionType | None = None,
     columns: list[str] | None = None,
     values: list[str] | None = None,
     returning: list[str] | None = None,
-) -> Insert:
+) -> Insert[C]:
     return Insert.from_model(
+        cursor=cursor,
         model=model,
         conflict_resolution=conflict_resolution,
         columns=columns,
@@ -587,14 +607,16 @@ def insert(
     )
 
 
-def select(
+def select[C: sqlite3.Cursor](
+    cursor: C,
     model: type,
     where: str | None = None,
     offset: int | None = None,
     limit: int | None = None,
     orderby: list[str] | None = None,
-) -> Select:
+) -> Select[C]:
     return Select.from_model(
+        cursor=cursor,
         model=model,
         where=where,
         offset=offset,
@@ -603,14 +625,16 @@ def select(
     )
 
 
-def update(
+def update[C: sqlite3.Cursor](
+    cursor: C,
     model: type,
     conflict_resolution: ConflictResolutionType | None = None,
     set: str | None = None,
     where: str | None = None,
     returning: list[str] | None = None,
-) -> Update:
+) -> Update[C]:
     return Update.from_model(
+        cursor=cursor,
         model=model,
         conflict_resolution=conflict_resolution,
         set=set,

@@ -1,7 +1,6 @@
 from textwrap import dedent
 from typing import (
     Callable,
-    ContextManager,
     Protocol,
     overload,
     Any,
@@ -13,7 +12,7 @@ from typing import (
     ClassVar,
     runtime_checkable,
 )
-from dataclasses import fields
+from dataclasses import dataclass, fields
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,10 +61,10 @@ def validate[M](
     elif isinstance(model, DataclassLike):
         if isinstance(obj, (tuple, list)):
             obj = dict(zip((f.name for f in fields(model)), obj))
-    return typeadapter(model).validate_python(obj)
+    return typeadapter(model).validate_python(obj)  # type: ignore
 
 
-class EZCursor(sqlite3.Cursor):
+class CursorBase(sqlite3.Cursor):
     @overload
     def execute(self, sql: appbase.statements.Statement) -> Self: ...
     @overload
@@ -113,7 +112,27 @@ class EZCursor(sqlite3.Cursor):
         self.close()
 
 
-class ModelCursor[M](EZCursor):
+class EZCursor(CursorBase):
+    def delete(self, model: type) -> appbase.statements.Delete[Self]:
+        return appbase.statements.delete(self, model)
+
+    def count(self, model: type) -> appbase.statements.Count[Self]:
+        return appbase.statements.count(self, model)
+
+    def create(self, model: type) -> appbase.statements.Create[Self]:
+        return appbase.statements.create(self, model)
+
+    def insert(self, model: type) -> appbase.statements.Insert[Self]:
+        return appbase.statements.insert(self, model)
+
+    def select(self, model: type) -> appbase.statements.Select[Self]:
+        return appbase.statements.select(self, model)
+
+    def update(self, model: type) -> appbase.statements.Update[Self]:
+        return appbase.statements.update(self, model)
+
+
+class ModelCursor[M](CursorBase):
     model: type[M]
 
     def one(self) -> M | None:
@@ -128,30 +147,23 @@ class ModelCursor[M](EZCursor):
     def iter(self) -> Iterator[M]:
         yield from super().parsed(self.model)
 
+    def delete(self) -> appbase.statements.Delete[Self]:
+        return appbase.statements.delete(self, self.model)
 
-class Repository:
-    def __init__(self, connection: sqlite3.Connection | None = None) -> None:
-        self.connection: sqlite3.Connection | None = connection
+    def count(self) -> appbase.statements.Count[Self]:
+        return appbase.statements.count(self, self.model)
 
-    def cursor(self, connection: sqlite3.Connection | None = None) -> EZCursor:
-        connection = connection or self.connection
-        if connection is None:
-            raise ValueError("Must pass in a connection or cursor at some point.")
-        return connection.cursor(EZCursor)  # type: ignore
+    def create(self) -> appbase.statements.Create[Self]:
+        return appbase.statements.create(self, self.model)
 
-    def execute(
-        self,
-        sql: str,
-        *params,
-        connection: sqlite3.Connection | None = None,
-        **kwparams,
-    ) -> EZCursor:
-        return self.cursor(connection).execute(sql, *params, **kwparams)
+    def insert(self) -> appbase.statements.Insert[Self]:
+        return appbase.statements.insert(self, self.model)
 
-    def transact(
-        self, connection: sqlite3.Connection | None = None
-    ) -> ContextManager[EZCursor]:
-        return self.cursor(connection).transact()
+    def select(self) -> appbase.statements.Select[Self]:
+        return appbase.statements.select(self, self.model)
+
+    def update(self) -> appbase.statements.Update[Self]:
+        return appbase.statements.update(self, self.model)
 
 
 class Table[M: ModelType]:
@@ -167,23 +179,15 @@ class Table[M: ModelType]:
         cursor.model = self.model
         return cursor
 
-    def delete(self) -> appbase.statements.Delete:
-        return appbase.statements.delete(self.model)
 
-    def count(self) -> appbase.statements.Count:
-        return appbase.statements.count(self.model)
+class EZConnection(sqlite3.Connection):
+    def table[M: ModelType](self, model: type[M]) -> ModelCursor[M]:
+        cursor = super().cursor(ModelCursor)
+        cursor.model = model
+        return cursor
 
-    def create(self) -> appbase.statements.Create:
-        return appbase.statements.create(self.model)
-
-    def insert(self) -> appbase.statements.Insert:
-        return appbase.statements.insert(self.model)
-
-    def select(self) -> appbase.statements.Select:
-        return appbase.statements.select(self.model)
-
-    def update(self) -> appbase.statements.Update:
-        return appbase.statements.update(self.model)
+    def cursor[C: sqlite3.Cursor](self, factory: type[C] = EZCursor) -> C: # type: ignore[override]
+        return super().cursor(factory)
 
 
 ADAPTERS: dict[type, AdapterType] = {
@@ -198,7 +202,7 @@ CONVERTERS: dict[str, ConverterType] = {
 }
 
 
-def connect(
+def connect[C: sqlite3.Connection](
     uri: str | Path,
     /,
     autocommit: bool = True,
@@ -207,13 +211,15 @@ def connect(
     echo: bool = True,
     adapters: dict[type, AdapterType] = ADAPTERS,
     converters: dict[str, ConverterType] = CONVERTERS,
+    factory: type[C] = EZConnection,
     **kwargs,
-) -> sqlite3.Connection:
+) -> C:
     connection = sqlite3.connect(
         uri,
         autocommit=autocommit,  # type: ignore
         detect_types=detect_types,
         timeout=timeout,
+        factory=factory,
         **kwargs,
     )
 
@@ -262,7 +268,7 @@ def _finalize_connection(connection: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def lifespan(
+def lifespan[C: sqlite3.Connection](
     uri: str | Path,
     /,
     autocommit: bool = True,
@@ -271,8 +277,9 @@ def lifespan(
     echo: bool = True,
     adapters: dict[type, AdapterType] = ADAPTERS,
     converters: dict[str, ConverterType] = CONVERTERS,
+    factory: type[C] = EZConnection,
     **kwargs,
-) -> Iterator[sqlite3.Connection]:
+) -> Iterator[C]:
     connection = connect(
         uri,
         autocommit=autocommit,
@@ -281,6 +288,7 @@ def lifespan(
         echo=echo,
         adapters=adapters,
         converters=converters,
+        factory=factory,
         **kwargs,
     )
     try:
