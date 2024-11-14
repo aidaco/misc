@@ -2,6 +2,7 @@ from textwrap import dedent
 from typing import (
     Callable,
     Protocol,
+    Unpack,
     overload,
     Any,
     Iterator,
@@ -12,7 +13,7 @@ from typing import (
     ClassVar,
     runtime_checkable,
 )
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, is_dataclass
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ import sqlite3
 import pydantic
 import timedelta_isoformat
 
-import appbase.statements
+from appbase import statements
 
 
 @runtime_checkable
@@ -54,19 +55,27 @@ def validate[M](
     obj: Any,
     model: type[M],
 ) -> M:
+    validator: Callable[[Any], M]
     if isinstance(model, pydantic.BaseModel):
-        if isinstance(obj, (tuple, list)):
-            obj = dict(zip(model.model_fields, obj))
-        return model.model_validate(obj)
+        validator = model.model_validate
+        field_names = iter(model.model_fields)
     elif isinstance(model, DataclassLike):
-        if isinstance(obj, (tuple, list)):
-            obj = dict(zip((f.name for f in fields(model)), obj))
-    return typeadapter(model).validate_python(obj)  # type: ignore
+        validator = typeadapter(model).validate_python  # type: ignore
+        field_names = (f.name for f in fields(model))
+    else:
+        raise TypeError(f"Unsupported model type: {model}")
+
+    if isinstance(obj, (tuple, list)):
+        obj = dict(zip(field_names, obj))
+    elif isinstance(obj, sqlite3.Row):
+        obj = dict(obj)
+
+    return validator(obj)  # type: ignore
 
 
 class CursorBase(sqlite3.Cursor):
     @overload
-    def execute(self, sql: appbase.statements.Statement) -> Self: ...
+    def execute(self, sql: statements.Statement) -> Self: ...
     @overload
     def execute(self, sql: str, *params: Any) -> Self: ...
     @overload
@@ -74,12 +83,12 @@ class CursorBase(sqlite3.Cursor):
     @overload
     def execute(self, sql: str, param: dict | tuple) -> Self: ...
     def execute(self, sql, *var_params, **kvar_params):
-        if isinstance(sql, appbase.statements.Statement) and (
+        if isinstance(sql, statements.Statement) and (
             exec := getattr(sql, "execute", None)
         ):
             return exec(self)
         else:
-            params = appbase.statements.extract_param(var_params, kvar_params)
+            params = statements.extract_param(var_params, kvar_params)
             return super().execute(str(sql), params)
 
     @contextmanager
@@ -91,6 +100,29 @@ class CursorBase(sqlite3.Cursor):
         except Exception as exc:
             self.execute("ROLLBACK")
             raise exc
+
+    def parsen(self, *types: type) -> Iterator:
+        row = self.fetchone()
+        match row:
+            case sqlite3.Row:
+                row = (row[k] for k in row)
+            case tuple():
+                row = iter(row)
+        for typ in types:
+            match typ:
+                case type() if is_dataclass(typ):
+                    ns = (f.name for f in fields(typ))
+                    val = dict(zip(ns, row))
+                    yield typeadapter(typ).validate_python(val)
+                case type() if issubclass(typ, pydantic.BaseModel):
+                    ns = iter(typ.model_fields)
+                    val = dict(zip(ns, row))
+                    yield typeadapter(typ).validate_python(val)
+                case type():
+                    val = next(row)
+                    yield typeadapter(typ).validate_python(val)
+                case _:
+                    raise TypeError(f"Unsupported type {typ}.")
 
     def parseone[M](self, model: type[M]) -> M | None:
         row = self.fetchone()
@@ -113,23 +145,84 @@ class CursorBase(sqlite3.Cursor):
 
 
 class EZCursor(CursorBase):
-    def delete(self, model: type) -> appbase.statements.Delete[Self]:
-        return appbase.statements.delete(self, model)
+    def delete(
+        self,
+        model: type,
+        where: str | None = None,
+        returning: list[str] | None = None,
+    ) -> statements.Delete[Self]:
+        return statements.Delete.from_model(self, model, where, returning)
 
-    def count(self, model: type) -> appbase.statements.Count[Self]:
-        return appbase.statements.count(self, model)
+    def count(self, model: type) -> statements.Count[Self]:
+        return statements.Count.from_model(self, model)
 
-    def create(self, model: type) -> appbase.statements.Create[Self]:
-        return appbase.statements.create(self, model)
+    def create(
+        self,
+        model: type,
+        if_not_exists: bool = False,
+        strict: bool = False,
+        without_rowid: bool = False,
+    ) -> statements.Create[Self]:
+        return statements.Create.from_model(
+            self,
+            model=model,
+            if_not_exists=if_not_exists,
+            strict=strict,
+            without_rowid=without_rowid,
+        )
 
-    def insert(self, model: type) -> appbase.statements.Insert[Self]:
-        return appbase.statements.insert(self, model)
+    def insert(
+        self,
+        model: type,
+        conflict_resolution: ConflictResolutionType | None = None,
+        columns: list[str] | None = None,
+        values: list[str] | None = None,
+        returning: list[str] | None = None,
+    ) -> statements.Insert[Self]:
+        return statements.Insert.from_model(
+            self,
+            model=model,
+            conflict_resolution=conflict_resolution,
+            columns=columns,
+            values=values,
+            returning=returning,
+        )
 
-    def select(self, model: type) -> appbase.statements.Select[Self]:
-        return appbase.statements.select(self, model)
+    def select(
+        self,
+        model: type,
+        fields: list[str | type] | None = None,
+        where: str | None = None,
+        offset: int | None = None,
+        limit: int | None = None,
+        orderby: list[str] | None = None,
+    ) -> statements.Select[Self]:
+        return statements.Select.from_model(
+            self,
+            model=model,
+            fields=fields,
+            where=where,
+            offset=offset,
+            limit=limit,
+            orderby=orderby,
+        )
 
-    def update(self, model: type) -> appbase.statements.Update[Self]:
-        return appbase.statements.update(self, model)
+    def update(
+        self,
+        model: type,
+        conflict_resolution: ConflictResolutionType | None = None,
+        set: str | None = None,
+        where: str | None = None,
+        returning: list[str] | None = None,
+    ) -> statements.Update[Self]:
+        return statements.Update.from_model(
+            cursor=self,
+            model=model,
+            conflict_resolution=conflict_resolution,
+            set=set,
+            where=where,
+            returning=returning,
+        )
 
 
 class ModelCursor[M](CursorBase):
@@ -147,23 +240,79 @@ class ModelCursor[M](CursorBase):
     def iter(self) -> Iterator[M]:
         yield from super().parsed(self.model)
 
-    def delete(self) -> appbase.statements.Delete[Self]:
-        return appbase.statements.delete(self, self.model)
+    def delete(
+        self,
+        where: str | None = None,
+        returning: list[str] | None = None,
+    ) -> statements.Delete[Self]:
+        return statements.Delete.from_model(self, self.model, where, returning)
 
-    def count(self) -> appbase.statements.Count[Self]:
-        return appbase.statements.count(self, self.model)
+    def count(self, model: type) -> statements.Count[Self]:
+        return statements.Count.from_model(self, model)
 
-    def create(self) -> appbase.statements.Create[Self]:
-        return appbase.statements.create(self, self.model)
+    def create(
+        self,
+        if_not_exists: bool = False,
+        strict: bool = False,
+        without_rowid: bool = False,
+    ) -> statements.Create[Self]:
+        return statements.Create.from_model(
+            self,
+            model=self.model,
+            if_not_exists=if_not_exists,
+            strict=strict,
+            without_rowid=without_rowid,
+        )
 
-    def insert(self) -> appbase.statements.Insert[Self]:
-        return appbase.statements.insert(self, self.model)
+    def insert(
+        self,
+        conflict_resolution: ConflictResolutionType | None = None,
+        columns: list[str] | None = None,
+        values: list[str] | None = None,
+        returning: list[str] | None = None,
+    ) -> statements.Insert[Self]:
+        return statements.Insert.from_model(
+            self,
+            model=self.model,
+            conflict_resolution=conflict_resolution,
+            columns=columns,
+            values=values,
+            returning=returning,
+        )
 
-    def select(self) -> appbase.statements.Select[Self]:
-        return appbase.statements.select(self, self.model)
+    def select(
+        self,
+        fields: list[str | type] | None = None,
+        where: str | None = None,
+        offset: int | None = None,
+        limit: int | None = None,
+        orderby: list[str] | None = None,
+    ) -> statements.Select[Self]:
+        return statements.Select.from_model(
+            self,
+            model=self.model,
+            fields=fields,
+            where=where,
+            offset=offset,
+            limit=limit,
+            orderby=orderby,
+        )
 
-    def update(self) -> appbase.statements.Update[Self]:
-        return appbase.statements.update(self, self.model)
+    def update(
+        self,
+        conflict_resolution: ConflictResolutionType | None = None,
+        set: str | None = None,
+        where: str | None = None,
+        returning: list[str] | None = None,
+    ) -> statements.Update[Self]:
+        return statements.Update.from_model(
+            cursor=self,
+            model=self.model,
+            conflict_resolution=conflict_resolution,
+            set=set,
+            where=where,
+            returning=returning,
+        )
 
 
 class Table[M: ModelType]:
@@ -186,7 +335,7 @@ class EZConnection(sqlite3.Connection):
         cursor.model = model
         return cursor
 
-    def cursor[C: sqlite3.Cursor](self, factory: type[C] = EZCursor) -> C: # type: ignore[override]
+    def cursor[C: sqlite3.Cursor](self, factory: type[C] = EZCursor) -> C:  # type: ignore[override]
         return super().cursor(factory)
 
 

@@ -14,6 +14,7 @@ from typing import (
     Literal,
 )
 from types import UnionType
+import types
 from itertools import chain
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -77,7 +78,7 @@ class ColumnDef:
                         raise TypeError(f"Can only accept one str annotation: {t}")
             elif origin is UnionType:
                 match get_args(t):
-                    case (_type, None) | (None, _type):
+                    case (_type, types.NoneType) | (types.NoneType, _type):
                         not_null = False
                         unpack_type(_type)
                         return
@@ -85,9 +86,9 @@ class ColumnDef:
                         raise TypeError(f"Unions not supported, except | None: {t}")
 
         unpack_type(annotation)
-        if constraints is None and not_null is not None:
+        if constraints is None and not_null:
             constraints = "NOT NULL"
-        elif constraints is not None and not_null is not None:
+        elif constraints is not None and not_null:
             constraints = f"NOT NULL {constraints}"
 
         return cls(name, sqlite_type, constraints)
@@ -203,7 +204,7 @@ class Create[C: sqlite3.Cursor](Statement[C]):
 @dataclasses.dataclass
 class Select[C: sqlite3.Cursor](Statement[C]):
     table: str
-    _fields: list[str]
+    fields: list[str]
     _where: str | None
     _groupby: list[str] | None
     _orderby: list[str] | None
@@ -263,6 +264,7 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         cursor: C,
         model: type,
         table: str | None = None,
+        fields: list[str | type] | None = None,
         where: str | None = None,
         groupby: list[str] | None = None,
         orderby: list[str] | None = None,
@@ -271,11 +273,19 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         limit: int | None = None,
     ) -> Self:
         table = table or table_name_for(model)
-        fields = [name for name, _ in annotations_from(model)]
+        if fields:
+            _fields = []
+            for f in fields:
+                if isinstance(f, str):
+                    _fields.append(f)
+                else:
+                    _fields.extend((name for name, _ in annotations_from(model)))
+        else:
+            _fields = [name for name, _ in annotations_from(model)]
         return cls(
             cursor=cursor,
             table=table,
-            _fields=fields,
+            fields=_fields,
             _where=where,
             _groupby=groupby,
             _orderby=orderby,
@@ -287,7 +297,7 @@ class Select[C: sqlite3.Cursor](Statement[C]):
 
     def __str__(self) -> str:
         stmt = "SELECT"
-        stmt += f" * FROM {self.table}"
+        stmt += f" {', '.join(self.fields)} FROM {self.table}"
         stmt += f" WHERE {self._where}" if self._where else ""
         stmt += f" GROUP BY {', '.join(self._groupby)}" if self._groupby else ""
         stmt += f" HAVING {self._having}" if self._having else ""
@@ -514,6 +524,7 @@ class Delete[C: sqlite3.Cursor](Statement[C]):
     table: str
     _where: str | None
     _returning: list[str] | None
+    _param: dict | None
 
     @classmethod
     def from_model(
@@ -524,10 +535,33 @@ class Delete[C: sqlite3.Cursor](Statement[C]):
         returning: list[str] | None = None,
     ) -> Self:
         table = table_name_for(model)
-        return cls(cursor=cursor, table=table, _where=where, _returning=returning)
+        return cls(
+            cursor=cursor, table=table, _where=where, _returning=returning, _param=None
+        )
 
-    def where(self, expr: str) -> Self:
-        self._where = expr
+    @overload
+    def where(self, expr: str | dict) -> Self: ...
+    @overload
+    def where(self, **kwparams) -> Self: ...
+    def where(self, expr: str | dict | None = None, **kwparams):
+        match (expr, kwparams):
+            case (str(), dict()) if not kwparams:
+                self._where = expr
+                return self
+            case (dict(), dict()) if not kwparams:
+                param = extract_param((), expr)
+            case (None, dict()) if kwparams:
+                param = extract_param((), kwparams)
+            case _:
+                raise TypeError("Must pass set expr as str or set params as kwargs")
+        match param:
+            case dict():
+                self._where = " AND ".join(f"{name}=:{name}" for name in param)
+                self._param = (
+                    (self._param | param) if self._param is not None else param
+                )
+            case _:
+                raise TypeError("Must pass update params as dict or kwargs")
         return self
 
     def returning(self, *expr: str) -> Self:
@@ -539,6 +573,11 @@ class Delete[C: sqlite3.Cursor](Statement[C]):
         stmt += f" WHERE {self._where}" if self._where else ""
         stmt += f" RETURNING {','.join(self._returning)}" if self._returning else ""
         return stmt
+
+    def execute(self, *params, **kwparams) -> C:
+        if self._param:
+            return super().execute(self._param)
+        return super().execute(*params, **kwparams)
 
 
 @dataclasses.dataclass
@@ -610,6 +649,7 @@ def insert[C: sqlite3.Cursor](
 def select[C: sqlite3.Cursor](
     cursor: C,
     model: type,
+    fields: list[str | type] | None = None,
     where: str | None = None,
     offset: int | None = None,
     limit: int | None = None,
@@ -618,6 +658,7 @@ def select[C: sqlite3.Cursor](
     return Select.from_model(
         cursor=cursor,
         model=model,
+        fields=fields,
         where=where,
         offset=offset,
         limit=limit,
