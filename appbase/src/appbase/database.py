@@ -247,8 +247,8 @@ class ModelCursor[M](CursorBase):
     ) -> statements.Delete[Self]:
         return statements.Delete.from_model(self, self.model, where, returning)
 
-    def count(self, model: type) -> statements.Count[Self]:
-        return statements.Count.from_model(self, model)
+    def count(self) -> statements.Count[Self]:
+        return statements.Count.from_model(self, self.model)
 
     def create(
         self,
