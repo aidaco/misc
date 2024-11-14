@@ -204,7 +204,7 @@ class Create[C: sqlite3.Cursor](Statement[C]):
 @dataclasses.dataclass
 class Select[C: sqlite3.Cursor](Statement[C]):
     table: str
-    fields: list[str]
+    _fields: list[str]
     _where: str | None
     _groupby: list[str] | None
     _orderby: list[str] | None
@@ -238,6 +238,16 @@ class Select[C: sqlite3.Cursor](Statement[C]):
                 raise TypeError("Must pass update params as dict or kwargs")
         return self
 
+    def fields(self, *exprs: str | type) -> Self:
+        _fields = []
+        for f in exprs:
+            if isinstance(f, str):
+                _fields.append(f)
+            else:
+                _fields.extend((name for name, _ in annotations_from(f)))
+        self._fields = _fields
+        return self
+
     def groupby(self, *terms: str) -> Self:
         self._groupby = list(terms)
         return self
@@ -263,7 +273,7 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         cls,
         cursor: C,
         model: type,
-        table: str | None = None,
+        table: str | type | None = None,
         fields: list[str | type] | None = None,
         where: str | None = None,
         groupby: list[str] | None = None,
@@ -272,7 +282,13 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         offset: int | None = None,
         limit: int | None = None,
     ) -> Self:
-        table = table or table_name_for(model)
+        match table:
+            case None:
+                table = table_name_for(model)
+            case str():
+                pass
+            case type():
+                table = table_name_for(table)
         if fields:
             _fields = []
             for f in fields:
@@ -285,7 +301,7 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         return cls(
             cursor=cursor,
             table=table,
-            fields=_fields,
+            _fields=_fields,
             _where=where,
             _groupby=groupby,
             _orderby=orderby,
@@ -297,7 +313,7 @@ class Select[C: sqlite3.Cursor](Statement[C]):
 
     def __str__(self) -> str:
         stmt = "SELECT"
-        stmt += f" {', '.join(self.fields)} FROM {self.table}"
+        stmt += f" {', '.join(self._fields)} FROM {self.table}"
         stmt += f" WHERE {self._where}" if self._where else ""
         stmt += f" GROUP BY {', '.join(self._groupby)}" if self._groupby else ""
         stmt += f" HAVING {self._having}" if self._having else ""
