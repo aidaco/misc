@@ -1,15 +1,37 @@
-import appbase
+import pytest
+from unittest.mock import patch
+
 import pydantic
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+
+import appbase
 
 
 def utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-def test_users():
+def test_database_context_manager():
+    db = appbase.database.connect(":memory:")
+    with (
+        patch.object(db, "connect") as connect_mock,
+        patch.object(db, "close") as close_mock,
+    ):
+        with db:
+            pass
+    connect_mock.assert_called_once()
+    close_mock.assert_called_once()
+
+
+@pytest.fixture
+def memdb():
+    with appbase.database.connect(":memory:") as db:
+        yield db
+
+
+def test_users(memdb):
     def hashpw_unsafe(pw: str) -> str:
         return hashlib.md5(pw.encode()).hexdigest()
 
@@ -36,10 +58,7 @@ def test_users():
         def verifypw(self, pw: str) -> bool:
             return verifypw_unsafe(self.password_hash, pw)
 
-    with (
-        appbase.database.lifespan(":memory:") as connection,
-        connection.table(User) as users,
-    ):
+    with memdb.table(User) as users:
         users.create().if_not_exists().execute()
         mkusers = [
             MkUser.model_validate(data)
@@ -57,7 +76,5 @@ def test_users():
 
         stmt.execute()
         assert (
-            users.count().get()
-            == len(mkusers)
-            == len(users.select().execute().all())
+            users.count().get() == len(mkusers) == len(users.select().execute().all())
         )

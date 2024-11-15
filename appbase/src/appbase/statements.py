@@ -143,36 +143,29 @@ class Statement[C: sqlite3.Cursor]:
 
 @dataclasses.dataclass
 class Create[C: sqlite3.Cursor](Statement[C]):
-    table: str
-    columns: list[ColumnDef]
-    table_contraints: list[str]
-    _if_not_exists: bool
-    _strict: bool
-    _without_rowid: bool
+    name: str
+    _columns: list[ColumnDef] | None = None
+    _table_constraints: list[str] | None = None
+    _if_not_exists: bool = False
+    _strict: bool = False
+    _without_rowid: bool = False
 
-    @classmethod
-    def from_model(
-        cls,
-        cursor: C,
-        model: type,
-        if_not_exists: bool = False,
-        strict: bool = False,
-        without_rowid: bool = False,
-    ) -> Self:
-        table = table_name_for(model)
-        columns = [
-            ColumnDef.from_annotation(name, annotation)
-            for name, annotation in annotations_from(model)
-        ]
-        return cls(
-            cursor=cursor,
-            table=table,
-            columns=columns,
-            table_contraints=[],
-            _if_not_exists=if_not_exists,
-            _strict=strict,
-            _without_rowid=without_rowid,
-        )
+    def columns(self, model: type | None = None, **fields: type) -> Self:
+        if model and fields:
+            raise ValueError("Must pass exactly one of model or **fields.")
+        elif model:
+            columns = [
+                ColumnDef.from_annotation(name, annotation)
+                for name, annotation in annotations_from(model)
+            ]
+        elif fields:
+            columns = [
+                ColumnDef.from_annotation(name, typ) for name, typ in fields.items()
+            ]
+        else:
+            columns = None
+        self._columns = columns
+        return self
 
     def if_not_exists(self, if_not_exists: bool = True) -> Self:
         self._if_not_exists = if_not_exists
@@ -189,8 +182,12 @@ class Create[C: sqlite3.Cursor](Statement[C]):
     def __str__(self) -> str:
         stmt = "CREATE TABLE"
         stmt += " IF NOT EXISTS" if self._if_not_exists else ""
-        stmt += " " + self.table
-        stmt += f"({', '.join(chain(map(str, self.columns), self.table_contraints))})"
+        stmt += " " + self.name
+        if self._columns is None:
+            raise ValueError("Must provide column info.")
+        stmt += f"({', '.join(
+                              chain(map(str, self._columns), self._table_constraints or ())
+                          )})"
         table_options = []
         if self._strict:
             table_options.append("STRICT")
@@ -203,15 +200,39 @@ class Create[C: sqlite3.Cursor](Statement[C]):
 
 @dataclasses.dataclass
 class Select[C: sqlite3.Cursor](Statement[C]):
-    table: str
     _fields: list[str]
-    _where: str | None
-    _groupby: list[str] | None
-    _orderby: list[str] | None
-    _having: str | None
-    _offset: int | None
-    _limit: int | None
-    _param: dict | None
+    _table: str | None = None
+    _join: list[str] | None = None
+    _where: str | None = None
+    _groupby: list[str] | None = None
+    _orderby: list[str] | None = None
+    _having: str | None = None
+    _offset: int | None = None
+    _limit: int | None = None
+    _param: dict | None = None
+
+    def fields(self, *exprs: str | type) -> Self:
+        _fields = []
+        for f in exprs:
+            if isinstance(f, str):
+                _fields.append(f)
+            else:
+                _fields.extend((name for name, _ in annotations_from(f)))
+        self._fields = _fields
+        return self
+
+    def table(self, expr: str | type) -> Self:
+        match expr:
+            case str():
+                pass
+            case type():
+                expr = table_name_for(expr)
+        self._table = expr
+        return self
+
+    def join(self, *exprs: str) -> Self:
+        self._join = [f"join {e}" for e in exprs]
+        return self
 
     @overload
     def where(self, expr: str | dict) -> Self: ...
@@ -238,16 +259,6 @@ class Select[C: sqlite3.Cursor](Statement[C]):
                 raise TypeError("Must pass update params as dict or kwargs")
         return self
 
-    def fields(self, *exprs: str | type) -> Self:
-        _fields = []
-        for f in exprs:
-            if isinstance(f, str):
-                _fields.append(f)
-            else:
-                _fields.extend((name for name, _ in annotations_from(f)))
-        self._fields = _fields
-        return self
-
     def groupby(self, *terms: str) -> Self:
         self._groupby = list(terms)
         return self
@@ -268,52 +279,11 @@ class Select[C: sqlite3.Cursor](Statement[C]):
         self._limit = value
         return self
 
-    @classmethod
-    def from_model(
-        cls,
-        cursor: C,
-        model: type,
-        table: str | type | None = None,
-        fields: list[str | type] | None = None,
-        where: str | None = None,
-        groupby: list[str] | None = None,
-        orderby: list[str] | None = None,
-        having: str | None = None,
-        offset: int | None = None,
-        limit: int | None = None,
-    ) -> Self:
-        match table:
-            case None:
-                table = table_name_for(model)
-            case str():
-                pass
-            case type():
-                table = table_name_for(table)
-        if fields:
-            _fields = []
-            for f in fields:
-                if isinstance(f, str):
-                    _fields.append(f)
-                else:
-                    _fields.extend((name for name, _ in annotations_from(model)))
-        else:
-            _fields = [name for name, _ in annotations_from(model)]
-        return cls(
-            cursor=cursor,
-            table=table,
-            _fields=_fields,
-            _where=where,
-            _groupby=groupby,
-            _orderby=orderby,
-            _having=having,
-            _offset=offset,
-            _limit=limit,
-            _param=None,
-        )
-
     def __str__(self) -> str:
         stmt = "SELECT"
-        stmt += f" {', '.join(self._fields)} FROM {self.table}"
+        stmt += f" {', '.join(self._fields)}"
+        stmt += f" FROM {self._table}" if self._table else ""
+        stmt += f" {' '.join(self._join)}" if self._join else ""
         stmt += f" WHERE {self._where}" if self._where else ""
         stmt += f" GROUP BY {', '.join(self._groupby)}" if self._groupby else ""
         stmt += f" HAVING {self._having}" if self._having else ""
@@ -630,18 +600,35 @@ def count[C: sqlite3.Cursor](cursor: C, model: type) -> Count[C]:
 
 def create[C: sqlite3.Cursor](
     cursor: C,
-    model: type,
+    model_or_name: str | type | None = None,
+    /,
+    name: str | None = None,
+    constraints: list[str] | None = None,
     if_not_exists: bool = False,
     strict: bool = False,
     without_rowid: bool = False,
 ) -> Create[C]:
-    return Create.from_model(
+    match model_or_name:
+        case str():
+            name = name or model_or_name
+            model = None
+        case type() as model:
+            name = name or table_name_for(model)
+            model = model
+        case None:
+            model = None
+
+    if name is None:
+        raise ValueError("Expected name or model as first argument.")
+
+    return Create(
         cursor=cursor,
-        model=model,
-        if_not_exists=if_not_exists,
-        strict=strict,
-        without_rowid=without_rowid,
-    )
+        name=name,
+        _table_constraints=constraints,
+        _if_not_exists=if_not_exists,
+        _strict=strict,
+        _without_rowid=without_rowid,
+    ).columns(model)
 
 
 def insert[C: sqlite3.Cursor](
@@ -664,21 +651,40 @@ def insert[C: sqlite3.Cursor](
 
 def select[C: sqlite3.Cursor](
     cursor: C,
-    model: type,
-    fields: list[str | type] | None = None,
+    *fields: str | type,
+    table: str | type | None = None,
+    join: list[str] | None = None,
     where: str | None = None,
+    groupby: list[str] | None = None,
+    orderby: list[str] | None = None,
+    having: str | None = None,
     offset: int | None = None,
     limit: int | None = None,
-    orderby: list[str] | None = None,
+    param: dict | None = None,
 ) -> Select[C]:
-    return Select.from_model(
+    match table:
+        case str():
+            pass
+        case type():
+            table = table_name_for(table)
+    _fields = []
+    for f in fields:
+        if isinstance(f, str):
+            _fields.append(f)
+        else:
+            _fields.extend((name for name, _ in annotations_from(f)))
+    return Select(
         cursor=cursor,
-        model=model,
-        fields=fields,
-        where=where,
-        offset=offset,
-        limit=limit,
-        orderby=orderby,
+        _table=table,
+        _fields=_fields,
+        _join=join,
+        _where=where,
+        _groupby=groupby,
+        _orderby=orderby,
+        _having=having,
+        _offset=offset,
+        _limit=limit,
+        _param=param,
     )
 
 

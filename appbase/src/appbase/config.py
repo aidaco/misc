@@ -277,35 +277,60 @@ class ConfigConfig[S: SourceType]:
         self.root_instance = inst
         return inst
 
+    @staticmethod
+    def load[SS: SourceType](source: SS) -> "ConfigConfig[SS]":
+        return ConfigConfig(source, source.load())
 
-def load[S: SourceType](source: S) -> ConfigConfig[S]:
-    return ConfigConfig(source, source.load())
+    @overload
+    @staticmethod
+    def load_from(*, name: str) -> "ConfigConfig[PlatformdirsSource]": ...
+    @overload
+    @staticmethod
+    def load_from(
+        *, path: Path, format: Format = "toml"
+    ) -> "ConfigConfig[PathSource]": ...
+    @overload
+    @staticmethod
+    def load_from(
+        *, text: str, format: Format = "toml"
+    ) -> "ConfigConfig[StrSource]": ...
+    @overload
+    @staticmethod
+    def load_from(*, mapping: Mapping) -> "ConfigConfig[MappingSource]": ...
+    @staticmethod
+    def load_from(
+        *, name=None, path=None, text=None, mapping=None, format=None
+    ) -> "ConfigConfig":
+        if name:
+            src = PlatformdirsSource(name)
+        elif path:
+            src = PathSource(path, format)
+        elif text and format:
+            src = StrSource(text, format)
+        elif mapping:
+            src = MappingSource(mapping)
+        else:
+            raise ValueError("Must pass a kwarg.")
+        return ConfigConfig.load(src)
 
 
 @overload
-def load_from(*, name: str) -> ConfigConfig[PlatformdirsSource]: ...
+def load(*, name: str) -> ConfigConfig[PlatformdirsSource]: ...
 @overload
-def load_from(*, path: Path, format: Format = "toml") -> ConfigConfig[PathSource]: ...
+def load(*, path: Path, format: Format = "toml") -> ConfigConfig[PathSource]: ...
 @overload
-def load_from(*, text: str, format: Format = "toml") -> ConfigConfig[StrSource]: ...
+def load(*, text: str, format: Format = "toml") -> ConfigConfig[StrSource]: ...
 @overload
-def load_from(*, mapping: Mapping) -> ConfigConfig[MappingSource]: ...
-def load_from(
-    *,
-    name: str | None = None,
-    path: Path | None = None,
-    text: str | None = None,
-    mapping: Mapping[str, Any] | None = None,
-    format: Format | None = None,
-) -> ConfigConfig:
+def load(*, mapping: Mapping) -> ConfigConfig[MappingSource]: ...
+def load(*, name=None, path=None, text=None, mapping=None, format=None) -> ConfigConfig:
     if name:
         src = PlatformdirsSource(name)
     elif path:
         src = PathSource(path, format)
-    elif text and format:
-        src = StrSource(text, format)
+    elif text:
+        src = StrSource(text, format or "toml")
     elif mapping:
         src = MappingSource(mapping)
     else:
         raise ValueError("Must pass a kwarg.")
-    return load(src)
+    return ConfigConfig.load(src)

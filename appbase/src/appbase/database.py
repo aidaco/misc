@@ -12,7 +12,7 @@ from typing import (
     ClassVar,
     runtime_checkable,
 )
-from dataclasses import fields, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass, field
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PosixPath, WindowsPath
@@ -100,28 +100,58 @@ class CursorBase(sqlite3.Cursor):
             self.execute("ROLLBACK")
             raise exc
 
-    def parsen(self, *types: type) -> Iterator:
+    def varparseone(self, *types: type) -> tuple:
         row = self.fetchone()
         match row:
             case sqlite3.Row:
                 row = (row[k] for k in row)
             case tuple():
                 row = iter(row)
+        result = ()
         for typ in types:
             match typ:
                 case type() if is_dataclass(typ):
                     ns = (f.name for f in fields(typ))
                     val = dict(zip(ns, row))
-                    yield typeadapter(typ).validate_python(val)
+                    result = (*result, typeadapter(typ).validate_python(val))
                 case type() if issubclass(typ, pydantic.BaseModel):
                     ns = iter(typ.model_fields)
                     val = dict(zip(ns, row))
-                    yield typeadapter(typ).validate_python(val)
+                    result = (*result, typeadapter(typ).validate_python(val))
                 case type():
                     val = next(row)
-                    yield typeadapter(typ).validate_python(val)
+                    result = (*result, typeadapter(typ).validate_python(val))
                 case _:
                     raise TypeError(f"Unsupported type {typ}.")
+        return result
+
+    def varparseall(self, *types: type) -> list[tuple]:
+        return list(self.varparsed(*types))
+
+    def varparsed(self, *types: type) -> Iterator[tuple]:
+        for row in self:
+            match row:
+                case sqlite3.Row:
+                    row = (row[k] for k in row)
+                case tuple():
+                    row = iter(row)
+            result = ()
+            for typ in types:
+                match typ:
+                    case type() if is_dataclass(typ):
+                        ns = (f.name for f in fields(typ))
+                        val = dict(zip(ns, row))
+                        result = (*result, typeadapter(typ).validate_python(val))
+                    case type() if issubclass(typ, pydantic.BaseModel):
+                        ns = iter(typ.model_fields)
+                        val = dict(zip(ns, row))
+                        result = (*result, typeadapter(typ).validate_python(val))
+                    case type():
+                        val = next(row)
+                        result = (*result, typeadapter(typ).validate_python(val))
+                    case _:
+                        raise TypeError(f"Unsupported type {typ}.")
+            yield result
 
     def parseone[M](self, model: type[M]) -> M | None:
         row = self.fetchone()
@@ -157,14 +187,19 @@ class EZCursor(CursorBase):
 
     def create(
         self,
-        model: type,
+        model_or_name: str | type,
+        /,
+        name: str | None = None,
+        constraints: list[str] | None = None,
         if_not_exists: bool = False,
         strict: bool = False,
         without_rowid: bool = False,
     ) -> statements.Create[Self]:
-        return statements.Create.from_model(
+        return statements.create(
             self,
-            model=model,
+            model_or_name,
+            name=name,
+            constraints=constraints,
             if_not_exists=if_not_exists,
             strict=strict,
             without_rowid=without_rowid,
@@ -189,17 +224,17 @@ class EZCursor(CursorBase):
 
     def select(
         self,
-        model: type,
-        fields: list[str | type] | None = None,
+        *fields: str | type,
+        table: str | type | None = None,
         where: str | None = None,
         offset: int | None = None,
         limit: int | None = None,
         orderby: list[str] | None = None,
     ) -> statements.Select[Self]:
-        return statements.Select.from_model(
+        return statements.select(
             self,
-            model=model,
-            fields=fields,
+            *fields,
+            table=table,
             where=where,
             offset=offset,
             limit=limit,
@@ -251,13 +286,17 @@ class ModelCursor[M](CursorBase):
 
     def create(
         self,
+        name: str | None = None,
+        constraints: list[str] | None = None,
         if_not_exists: bool = False,
         strict: bool = False,
         without_rowid: bool = False,
     ) -> statements.Create[Self]:
-        return statements.Create.from_model(
+        return statements.create(
             self,
-            model=self.model,
+            self.model,
+            name=name,
+            constraints=constraints,
             if_not_exists=if_not_exists,
             strict=strict,
             without_rowid=without_rowid,
@@ -281,16 +320,16 @@ class ModelCursor[M](CursorBase):
 
     def select(
         self,
-        fields: list[str | type] | None = None,
+        *fields: str | type,
         where: str | None = None,
         offset: int | None = None,
         limit: int | None = None,
         orderby: list[str] | None = None,
     ) -> statements.Select[Self]:
-        return statements.Select.from_model(
+        return statements.select(
             self,
-            model=self.model,
-            fields=fields,
+            *(fields or (self.model,)),
+            table=self.model,
             where=where,
             offset=offset,
             limit=limit,
@@ -314,30 +353,6 @@ class ModelCursor[M](CursorBase):
         )
 
 
-class Table[M: ModelType]:
-    def __init__(self, model: type[M] | None = None) -> None:
-        if model:
-            self.model: type[M] = model
-        elif not hasattr(self, "model"):
-            raise ValueError("Must pass a model or set on subclass.")
-
-    def cursor(self, connection: sqlite3.Connection) -> ModelCursor[M]:
-        assert self.model is not None
-        cursor = connection.cursor(ModelCursor)  # type: ignore
-        cursor.model = self.model
-        return cursor
-
-
-class EZConnection(sqlite3.Connection):
-    def table[M: ModelType](self, model: type[M]) -> ModelCursor[M]:
-        cursor = super().cursor(ModelCursor)
-        cursor.model = model
-        return cursor
-
-    def cursor[C: sqlite3.Cursor](self, factory: type[C] = EZCursor) -> C:  # type: ignore[override]
-        return super().cursor(factory)
-
-
 ADAPTERS: dict[type, AdapterType] = {
     datetime: lambda dt: dt.astimezone(timezone.utc).isoformat().encode(),
     Path: Path.__bytes__,
@@ -352,39 +367,65 @@ CONVERTERS: dict[str, ConverterType] = {
 }
 
 
-def connect[C: sqlite3.Connection](
+@dataclass
+class Database:
+    uri: str | Path
+    autocommit: bool = True
+    detect_types: int = sqlite3.PARSE_DECLTYPES
+    timeout: int = 30
+    echo: bool = False
+    adapters: dict[type, AdapterType] = field(default_factory=lambda: ADAPTERS)
+    converters: dict[str, ConverterType] = field(default_factory=lambda: CONVERTERS)
+    connection: sqlite3.Connection | None = None
+
+    def table[M: ModelType](self, model: type[M]) -> ModelCursor[M]:
+        cursor = self.cursor(ModelCursor)
+        cursor.model = model
+        return cursor
+
+    def cursor[C: sqlite3.Cursor](self, factory: type[C] = EZCursor) -> C:
+        return self.connect().cursor(factory)
+
+    def connect(self) -> sqlite3.Connection:
+        if self.connection is None:
+            self.connection = _connect(
+                uri=self.uri,
+                autocommit=self.autocommit,
+                detect_types=self.detect_types,
+                timeout=self.timeout,
+                echo=self.echo,
+                adapters=self.adapters,
+                converters=self.converters,
+            )
+        return self.connection
+
+    def close(self) -> None:
+        if self.connection is not None:
+            _close(self.connection)
+
+    def __enter__(self) -> Self:
+        self.connect()
+        return self
+
+    def __exit__(self, exc, exc_type, exc_tb) -> None:
+        self.close()
+
+
+def _connect(
     uri: str | Path,
-    /,
-    autocommit: bool = True,
-    detect_types: int = sqlite3.PARSE_DECLTYPES,
-    timeout: int = 30,
-    echo: bool = True,
-    adapters: dict[type, AdapterType] = ADAPTERS,
-    converters: dict[str, ConverterType] = CONVERTERS,
-    factory: type[C] = EZConnection,
-    **kwargs,
-) -> C:
-    connection = sqlite3.connect(
-        uri,
-        autocommit=autocommit,  # type: ignore
-        detect_types=detect_types,
-        timeout=timeout,
-        factory=factory,
-        **kwargs,
-    )
-
-    _initialize_connection(
-        connection, echo=echo, adapters=adapters, converters=converters
-    )
-    return connection
-
-
-def _initialize_connection(
-    connection: sqlite3.Connection,
+    autocommit: bool,
+    detect_types: int,
+    timeout: int,
     echo: bool,
     adapters: dict[type, AdapterType],
     converters: dict[str, ConverterType],
-) -> None:
+) -> sqlite3.Connection:
+    connection = sqlite3.connect(
+        uri,
+        autocommit=autocommit,
+        detect_types=detect_types,
+        timeout=timeout,
+    )
     if echo:
         connection.set_trace_callback(print)
     for cls, adapter in adapters.items():
@@ -405,9 +446,10 @@ def _initialize_connection(
         PRAGMA optimize = 0x10002;
     """)
     )
+    return connection
 
 
-def _finalize_connection(connection: sqlite3.Connection) -> None:
+def _close(connection: sqlite3.Connection) -> None:
     connection.executescript(
         dedent("""\
         VACUUM;
@@ -415,34 +457,16 @@ def _finalize_connection(connection: sqlite3.Connection) -> None:
         PRAGMA optimize;
     """)
     )
+    connection.close()
 
 
-@contextmanager
-def lifespan[C: sqlite3.Connection](
+def connect(
     uri: str | Path,
-    /,
     autocommit: bool = True,
     detect_types: int = sqlite3.PARSE_DECLTYPES,
     timeout: int = 30,
-    echo: bool = True,
+    echo: bool = False,
     adapters: dict[type, AdapterType] = ADAPTERS,
     converters: dict[str, ConverterType] = CONVERTERS,
-    factory: type[C] = EZConnection,
-    **kwargs,
-) -> Iterator[C]:
-    connection = connect(
-        uri,
-        autocommit=autocommit,
-        detect_types=detect_types,
-        timeout=timeout,
-        echo=echo,
-        adapters=adapters,
-        converters=converters,
-        factory=factory,
-        **kwargs,
-    )
-    try:
-        yield connection
-    finally:
-        _finalize_connection(connection)
-        connection.close()
+) -> Database:
+    return Database(uri, autocommit, detect_types, timeout, echo, adapters, converters)
