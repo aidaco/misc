@@ -2,7 +2,6 @@ from textwrap import dedent
 from typing import (
     Callable,
     Protocol,
-    Unpack,
     overload,
     Any,
     Iterator,
@@ -13,10 +12,10 @@ from typing import (
     ClassVar,
     runtime_checkable,
 )
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PosixPath, WindowsPath
 import sqlite3
 
 import pydantic
@@ -342,6 +341,8 @@ class EZConnection(sqlite3.Connection):
 ADAPTERS: dict[type, AdapterType] = {
     datetime: lambda dt: dt.astimezone(timezone.utc).isoformat().encode(),
     Path: Path.__bytes__,
+    PosixPath: PosixPath.__bytes__,
+    WindowsPath: WindowsPath.__bytes__,
     timedelta: lambda td: timedelta_isoformat.timedelta.isoformat(td).encode(),
 }
 CONVERTERS: dict[str, ConverterType] = {
