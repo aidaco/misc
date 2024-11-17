@@ -284,12 +284,7 @@ class ConfigConfig[S: SourceType]:
     def root[M](self, cls: type[M]) -> Callable[[], M]:
         cls = dataclass(cls)
         self.root_class = cls
-
-        def load():
-            self.root_instance = inst = self.get_root()
-            return inst
-
-        return load
+        return lambda: self.get_root()
 
     @overload
     @staticmethod
@@ -347,13 +342,13 @@ class ConfigConfig[S: SourceType]:
             self.source = PlatformdirsSource(name)  # type: ignore
         elif path:
             self.source = PathSource(path, format)  # type: ignore
-        elif text and format:
-            self.source = StrSource(text, format)  # type: ignore
+        elif text:
+            self.source = StrSource(text, format or "toml")  # type: ignore
         elif mapping:
             self.source = MappingSource(mapping)  # type: ignore
         self.data_cache = None
         self.root_instance = None
-        self.section_instances = dict()
+        self.section_instances.clear()
 
 
 load = ConfigConfig.load
