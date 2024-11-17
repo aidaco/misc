@@ -189,6 +189,7 @@ class PathSource:
         return load_path(self.path, self.format)
 
     def dump(self, data: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         dump_path(data, self.path, self.format)
 
 
@@ -202,13 +203,11 @@ class PlatformdirsSource:
 
     @property
     def configdir(self) -> Path:
-        return Path(
-            platformdirs.user_config_dir(self.name, ensure_exists=True)
-        ).resolve()
+        return Path(platformdirs.user_config_dir(self.name)).resolve()
 
     @property
     def datadir(self) -> Path:
-        return Path(platformdirs.user_data_dir(self.name, ensure_exists=True)).resolve()
+        return Path(platformdirs.user_data_dir(self.name)).resolve()
 
     def load(self, format: Format | None = None, path: Path | None = None) -> dict:
         return load_path(path or self.configpath, format)
@@ -216,27 +215,41 @@ class PlatformdirsSource:
     def dump(
         self, data: dict, format: Format | None = None, path: Path | None = None
     ) -> None:
+        path = path or self.configpath
+        path.parent.mkdir(parents=True, exist_ok=True)
         dump_path(data, path or self.configpath, format)
 
 
 @dataclass
 class ConfigConfig[S: SourceType]:
     source: S
-    data: Mapping = field(default_factory=dict)
-    root_instance: Any | None = None
     root_class: type | None = None
+    root_instance: Any | None = None
     section_classes: dict[str, type] = field(default_factory=dict)
     section_instances: dict[str, Any] = field(default_factory=dict)
+    data_cache: Mapping[str, Any] | None = None
+
+    @property
+    def data(self) -> Mapping:
+        if self.data_cache is None:
+            self.data_cache = self.source.load()
+        return self.data_cache
 
     def get_section(self, key: str) -> Any:
-        return parse_python(self.data.get(key, {}), self.section_classes[key])
+        if key not in self.section_instances:
+            cls = self.section_classes[key]
+            data = self.data.get(key, {})
+            self.section_instances[key] = parse_python(data, cls)
+        return self.section_instances[key]
 
     def section_to_dict(self, key: str) -> dict:
         return dump_python(self.section_instances[key])
 
     def get_root(self) -> Any:
         assert self.root_class is not None
-        return parse_python(self.data, self.root_class)
+        if self.root_instance is None:
+            self.root_instance = parse_python(self.data, self.root_class)
+        return self.root_instance
 
     def root_to_dict(self) -> dict:
         assert self.root_instance is not None
@@ -260,76 +273,87 @@ class ConfigConfig[S: SourceType]:
         self.dump(src)
         return src.data
 
-    def section[M](self, key: str) -> Callable[[type[M]], M]:
-        def inner(cls: type[M]) -> M:
+    def section[M](self, key: str) -> Callable[[type[M]], Callable[[], M]]:
+        def inner(cls: type[M]):
             cls = dataclass(cls)
             self.section_classes[key] = cls
-            self.section_instances[key] = inst = self.get_section(key)
-            return inst
+            return lambda: self.get_section(key)
 
         return inner
 
-    def root[M](self, cls: type[M]) -> M:
+    def root[M](self, cls: type[M]) -> Callable[[], M]:
         cls = dataclass(cls)
         self.root_class = cls
-        inst = self.get_root()
-        self.root_instance = inst
-        return inst
 
-    @staticmethod
-    def load[SS: SourceType](source: SS) -> "ConfigConfig[SS]":
-        return ConfigConfig(source, source.load())
+        def load():
+            self.root_instance = inst = self.get_root()
+            return inst
+
+        return load
 
     @overload
     @staticmethod
-    def load_from(*, name: str) -> "ConfigConfig[PlatformdirsSource]": ...
+    def load[SS: SourceType](*, source: SS) -> "ConfigConfig[SS]": ...
     @overload
     @staticmethod
-    def load_from(
-        *, path: Path, format: Format = "toml"
+    def load(*, name: str) -> "ConfigConfig[PlatformdirsSource]": ...
+    @overload
+    @staticmethod
+    def load(
+        *, path: Path, format: Format | None = None
     ) -> "ConfigConfig[PathSource]": ...
     @overload
     @staticmethod
-    def load_from(
-        *, text: str, format: Format = "toml"
-    ) -> "ConfigConfig[StrSource]": ...
+    def load(*, text: str, format: Format = "toml") -> "ConfigConfig[StrSource]": ...
     @overload
     @staticmethod
-    def load_from(*, mapping: Mapping) -> "ConfigConfig[MappingSource]": ...
+    def load(*, mapping: Mapping) -> "ConfigConfig[MappingSource]": ...
     @staticmethod
-    def load_from(
-        *, name=None, path=None, text=None, mapping=None, format=None
+    def load(
+        *, source=None, name=None, path=None, text=None, mapping=None, format=None
     ) -> "ConfigConfig":
-        if name:
+        if source:
+            src = source
+        elif name:
             src = PlatformdirsSource(name)
         elif path:
             src = PathSource(path, format)
-        elif text and format:
-            src = StrSource(text, format)
+        elif text:
+            src = StrSource(text, format or "toml")
         elif mapping:
             src = MappingSource(mapping)
         else:
             raise ValueError("Must pass a kwarg.")
-        return ConfigConfig.load(src)
+        return ConfigConfig(src)
+
+    @overload
+    def reload(self) -> None: ...
+    @overload
+    def reload(self, *, source: SourceType) -> None: ...
+    @overload
+    def reload(self, *, name: str) -> None: ...
+    @overload
+    def reload(self, *, path: Path, format: Format = "toml") -> None: ...
+    @overload
+    def reload(self, *, text: str, format: Format = "toml") -> None: ...
+    @overload
+    def reload(self, *, mapping: Mapping) -> None: ...
+    def reload(
+        self, *, source=None, name=None, path=None, text=None, mapping=None, format=None
+    ) -> None:
+        if source:
+            self.source = source
+        elif name:
+            self.source = PlatformdirsSource(name)  # type: ignore
+        elif path:
+            self.source = PathSource(path, format)  # type: ignore
+        elif text and format:
+            self.source = StrSource(text, format)  # type: ignore
+        elif mapping:
+            self.source = MappingSource(mapping)  # type: ignore
+        self.data_cache = None
+        self.root_instance = None
+        self.section_instances = dict()
 
 
-@overload
-def load(*, name: str) -> ConfigConfig[PlatformdirsSource]: ...
-@overload
-def load(*, path: Path, format: Format = "toml") -> ConfigConfig[PathSource]: ...
-@overload
-def load(*, text: str, format: Format = "toml") -> ConfigConfig[StrSource]: ...
-@overload
-def load(*, mapping: Mapping) -> ConfigConfig[MappingSource]: ...
-def load(*, name=None, path=None, text=None, mapping=None, format=None) -> ConfigConfig:
-    if name:
-        src = PlatformdirsSource(name)
-    elif path:
-        src = PathSource(path, format)
-    elif text:
-        src = StrSource(text, format or "toml")
-    elif mapping:
-        src = MappingSource(mapping)
-    else:
-        raise ValueError("Must pass a kwarg.")
-    return ConfigConfig.load(src)
+load = ConfigConfig.load
