@@ -8,7 +8,6 @@ from typing import (
     Literal,
     Mapping,
     Protocol,
-    Self,
     TextIO,
     TypeAlias,
     runtime_checkable,
