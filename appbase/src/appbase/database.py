@@ -388,6 +388,8 @@ class Database:
 
     def connect(self) -> sqlite3.Connection:
         if self.connection is None:
+            if isinstance(self.uri, Path):
+                self.uri.parent.mkdir(parents=True, exist_ok=True)
             self.connection = _connect(
                 uri=self.uri,
                 autocommit=self.autocommit,
