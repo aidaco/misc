@@ -1,4 +1,3 @@
-import sys
 from pathlib import Path
 from typing import Literal
 from time import time_ns
@@ -10,7 +9,7 @@ from typer import Typer
 from openai import OpenAI
 
 
-key = open("/home/tuesday/documents/Secrets/openai-api-key").read().strip()
+key = (Path.home() / ".secrets" / "openai-api-key").read_text().strip()
 client = OpenAI(api_key=key)
 
 OUTDIR = Path("results")
@@ -78,14 +77,14 @@ def find_strs(o):
             print(f"unable to process {o}")
 
 
-def generate_variations(prompt: str) -> list[str]:
+def generate_variations(prompt: str, n: int) -> list[str]:
     response = (
         client.chat.completions.create(
             model="gpt-4-1106-preview",
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a helpful assistant that generates more optimized and intricately detailed suggestions for prompts to be given to an AI image generation model. Please responde only with a JSON object with a 'suggested_prompts' key holding an array with 5 suggested prompts of 100 to 200 words.",
+                    "content": f"You are a helpful assistant that generates more optimized and intricately detailed suggestions for prompts to be given to an AI image generation model. Please responde only with a JSON object with a 'suggested_prompts' key holding an array with {n} suggested prompts of 100 to 200 words.",
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -104,13 +103,13 @@ def moderate_prompt(prompt: str) -> bool:
     return not response.flagged
 
 
-def generate_image_variations(prompt: str):
+def generate_image_variations(prompt: str, n: int):
     if not moderate_prompt(prompt):
         raise ValueError("bad prompt")
     tag = f"{datetime.now():%Y-%m-%d %H-%M-%S}"
     print(f"TAG: {tag}")
 
-    prompts = [prompt, *generate_variations(prompt)]
+    prompts = [prompt, *generate_variations(prompt, n)]
 
     prompt_dir = OUTDIR / tag
     prompt_dir.mkdir(parents=True, exist_ok=False)
@@ -131,8 +130,8 @@ def single(prompt: str):
 
 
 @cli.command()
-def variations(prompt: str):
-    generate_image_variations(prompt)
+def variations(prompt: str, n: int = 5):
+    generate_image_variations(prompt, n)
 
 
 if __name__ == "__main__":

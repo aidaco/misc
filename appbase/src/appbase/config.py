@@ -207,7 +207,7 @@ class PlatformdirsSource:
 
     @property
     def datadir(self) -> Path:
-        return Path(platformdirs.user_data_dir(self.name)).resolve()
+        return Path(platformdirs.user_data_dir(self.name, ensure_exists=True)).resolve()
 
     def load(self, format: Format | None = None, path: Path | None = None) -> dict:
         return load_path(path or self.configpath, format)
