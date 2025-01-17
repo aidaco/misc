@@ -1,30 +1,39 @@
-[tool.poetry]
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
 name = "misc"
 version = "0.0.1"
 description = "Various personal utilities."
-authors = ["Aidan Courtney <aidanfc97@gmail.com>"]
-license = "MIT"
+readme = "README.md"
 requires-python = ">=3.12"
+license = {text="MIT"}
+keywords = ["services", "booking", "professional", "website"]
+authors = [
+  {name = "Aidan Courtney", email = "contact@aidan.software" }
+]
+dependencies = [
+  "cyclopts",
+  "typer",
+  "rich",
+  "pypdf",
+  "fastapi",
+  "openai"
+]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-cyclopts = "*"
-typer = "*"
-rich = "*"
-pypdf = "*"
-fastapi = "*"
-textual = "*"
-aiohttp = "*"
-blessed = "*"
-python-jose = "*"
-passlib = "*"
+[project.optional-dependencies]
+dev = ["pre-commit", "pyright", "ruff", "mypy"]
+test = ["pytest", "coverage", "requests"]
 
-[tool.poetry.scripts]
+[project.urls]
+"Source" = "https://github.com/aidaco/misc/"
+
+[project.scripts]
 misc = 'misc.cli:cli'
 
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+[tool.setuptools]
+packages = ["misc"]
 
 [tool.ruff]
 target-version = 'py312'
