@@ -446,6 +446,7 @@ def connect_raw(
         PRAGMA auto_vacuum = incremental;
         PRAGMA secure_delete = on;
         PRAGMA optimize = 0x10002;
+        PRAGMA recursive_triggers = on;
     """)
     )
     return connection
