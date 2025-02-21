@@ -374,8 +374,9 @@ class Database:
     detect_types: int = sqlite3.PARSE_DECLTYPES
     timeout: int = 30
     echo: bool = False
-    adapters: dict[type, AdapterType] = field(default_factory=lambda: ADAPTERS)
-    converters: dict[str, ConverterType] = field(default_factory=lambda: CONVERTERS)
+    adapters: dict[type, AdapterType] = field(default_factory=ADAPTERS.copy)
+    converters: dict[str, ConverterType] = field(default_factory=CONVERTERS.copy)
+
     connection: sqlite3.Connection | None = None
 
     def table[M: ModelType](self, model: type[M]) -> ModelCursor[M]:
@@ -390,7 +391,7 @@ class Database:
         if self.connection is None:
             if isinstance(self.uri, Path):
                 self.uri.parent.mkdir(parents=True, exist_ok=True)
-            self.connection = _connect(
+            self.connection = connect_raw(
                 uri=self.uri,
                 autocommit=self.autocommit,
                 detect_types=self.detect_types,
@@ -403,7 +404,7 @@ class Database:
 
     def close(self) -> None:
         if self.connection is not None:
-            _close(self.connection)
+            close_raw(self.connection)
 
     def __enter__(self) -> Self:
         self.connect()
@@ -413,7 +414,7 @@ class Database:
         self.close()
 
 
-def _connect(
+def connect_raw(
     uri: str | Path,
     autocommit: bool,
     detect_types: int,
@@ -443,7 +444,6 @@ def _connect(
         PRAGMA cache_size = -32000;
         PRAGMA foreign_keys = on;
         PRAGMA auto_vacuum = incremental;
-        PRAGMA foreign_keys = on;
         PRAGMA secure_delete = on;
         PRAGMA optimize = 0x10002;
     """)
@@ -451,7 +451,7 @@ def _connect(
     return connection
 
 
-def _close(connection: sqlite3.Connection) -> None:
+def close_raw(connection: sqlite3.Connection) -> None:
     connection.executescript(
         dedent("""\
         VACUUM;
