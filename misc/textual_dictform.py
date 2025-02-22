@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Input, Label
+from textual.widgets import Input, Label, Footer
 from textual.containers import ScrollableContainer, Horizontal
 
 
@@ -47,6 +47,7 @@ class DictApp(App):
                 with Horizontal():
                     yield Label(name)
                     yield Input(id=name)
+            yield Footer()
 
     def on_mount(self) -> None:
         self.set_focus(self.query('Input').first())
@@ -59,5 +60,5 @@ class DictApp(App):
 
 
 if __name__ == "__main__":
-    result = DictApp(*input().split(',')).run()
+    result = DictApp(*input("Comma separated fields: ").split(',')).run(inline=True)
     print(result)
