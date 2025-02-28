@@ -295,7 +295,7 @@ class ConfigConfig[S: SourceType]:
     @overload
     @staticmethod
     def load(
-        *, path: Path, format: Format | None = None
+        *, path: Path | str, format: Format | None = None
     ) -> "ConfigConfig[PathSource]": ...
     @overload
     @staticmethod
@@ -312,7 +312,7 @@ class ConfigConfig[S: SourceType]:
         elif name:
             src = PlatformdirsSource(name)
         elif path:
-            src = PathSource(path, format)
+            src = PathSource(Path(path), format)
         elif text:
             src = StrSource(text, format or "toml")
         elif mapping:
