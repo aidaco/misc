@@ -1,10 +1,12 @@
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Self
+from typing import Annotated, ClassVar, Self
 from pathlib import Path
 import sqlite3
 
 import appbase
+from misc.textual_dictform import modelinput
 
 
 def utcnow() -> datetime:
@@ -26,25 +28,43 @@ class authconfig:
 
 
 @confconf.section("db")
-class config:
+class dbconfig:
     uri: str | Path = rootconfig().datadir / "call_log.sqlite3"
 
 
-@dataclass
-class UserNew:
-    name: str
-    password: str
-    created_at: datetime = field(default_factory=utcnow)
-    updated_at: datetime | None = None
+def connect() -> appbase.database.Database:
+    return appbase.database.connect(dbconfig().uri)
 
-    @property
+
+def expect[T](value: T | None) -> T:
+    if value is None:
+        raise ValueError("Unexpected None.")
+    return value
+
+
+@dataclass
+class LoginParams:
+    username: str
+    password: str
+
     def password_hash(self) -> str:
         return appbase.security.hash_password(self.password)
 
+    def as_params(self) -> "UserParams":
+        return UserParams(self.username, self.password_hash())
+
 
 @dataclass
-class UserRecord:
-    id: int
+class UserParams:
+    name: str
+    password_hash: str
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime | None = None
+
+
+@dataclass
+class User:
+    id: appbase.database.INTPK
     name: str
     password_hash: str
     created_at: datetime
@@ -52,159 +72,114 @@ class UserRecord:
 
 
 class UserStore:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    def __init__(self, db: appbase.database.Database) -> None:
+        self.db: appbase.database.Database = db
 
     def create_table(self) -> None:
-        self._create_table(self.connection.cursor())
+        self.db.table(User).create().if_not_exists().execute()
 
-    def create(self, user: UserNew) -> UserRecord:
-        return self._insert(self.connection.cursor(), user)
-
-    @staticmethod
-    def _create_table(cursor: sqlite3.Cursor) -> None:
-        cursor.executescript(
-            """
-                CREATE TABLE IF NOT EXISTS user(
-                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    name TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    created_at DATETIME NOT NULL,
-                    updated_at DATETIME,
-                );
-            """
+    def insert(self, user: UserParams) -> User:
+        return expect(
+            self.db.table(User).insert().values(user).returning("*").execute().one()
         )
 
-    @staticmethod
-    def _insert(cursor: sqlite3.Cursor, user: UserNew) -> UserRecord:
-        row = cursor.execute(
-            """
-                INSERT INTO user(name, password_hash, created_at, updated_at)
-                VALUES (?,?,?,?)
-                RETURNING id, name, password_hash, created_at, updated_at
-            """,
-            (user.name, user.password_hash, user.created_at, user.updated_at),
-        ).fetchone()
-        return UserRecord(*row)
+    def select_by_name(self, name: str) -> User:
+        return expect(self.db.table(User).select().where(name=name).execute().one())
 
-    @staticmethod
-    def _select_by_name(cursor: sqlite3.Cursor, name: str) -> UserRecord:
-        row = cursor.execute(
-            """
-                SELECT id, name, password_hash, created_at, updated_at
-                FROM user
-                WHERE name = ?
-            """,
-            (name,),
-        ).fetchone()
-        return UserRecord(*row)
-
-    def login(self, name: str, password: str) -> UserRecord:
-        user = self._select_by_name(self.connection.cursor(), name)
+    def login(self, name: str, password: str) -> User:
+        user = self.select_by_name(name)
         if not appbase.security.verify_password(password, user.password_hash):
             raise ValueError("Login failed.")
         return user
 
 
 @dataclass
-class CallNew:
+class CallNote:
     number: str
     caller: str
-    received_by_id: int
     notes: str
+
+    def as_params(self, user: User) -> "CallParams":
+        return CallParams(
+            number=self.number,
+            caller=self.caller,
+            received_by_id=user.id,
+            notes=self.notes,
+        )
+
+
+@dataclass
+class CallParams:
+    number: str
+    caller: str
+    notes: str
+    received_by_id: int
     received_at: datetime = field(default_factory=utcnow)
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime | None = None
 
 
 @dataclass
-class CallRecord:
-    id: int
-    received_at: datetime
-    received_by_id: int
+class Call:
+    id: appbase.database.INTPK
     number: str
     caller: str
     notes: str
+    user_id: Annotated[int, "REFERENCES user(id) ON UPDATE CASCADE ON DELETE CASCADE"]
+    received_at: datetime
     created_at: datetime
     updated_at: datetime | None
 
 
 class CallStore:
-    def __init__(self, connection: sqlite3.Connection) -> None:
-        self.connection = connection
+    def __init__(self, db: appbase.database.Database) -> None:
+        self.db: appbase.database.Database = db
 
-    def _create_table(self, cursor: sqlite3.Cursor) -> None:
-        cursor.execute(
-            """
-                
-            """
+    def create_table(self) -> None:
+        self.db.table(Call).create().if_not_exists().execute()
+
+    def insert(self, call: CallParams) -> Call:
+        return expect(
+            self.db.table(Call).insert().values(call).returning("*").execute().one()
         )
 
-    @classmethod
-    def create(
-        cls,
-        received_at: datetime,
-        received_by: User,
-        number: str,
-        caller: str,
-        notes: str,
-    ) -> Self:
-        return (
-            cls.table()
-            .insert()
-            .values(
-                received_at=received_at,
-                received_by_id=received_by.id,
-                number=number,
-                caller=caller,
-                notes=notes,
-                created_at=utcnow(),
-            )
-            .execute()
-            .one()
-        )
 
-    @classmethod
-    def get(cls, id: int) -> Self:
-        return cls.table().select().where(id=id).execute().one()
+@dataclass
+class TaskParams:
+    name: str
+    notes: str
+    user_id: int
+    call_id: int | None = None
+    received_at: datetime = field(default_factory=utcnow)
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 @dataclass
 class Task:
-    id: INTPK
-    user_id: int
-    call_id: int | None
+    id: appbase.database.INTPK
+    user_id: Annotated[int, "REFERENCES user(id) ON UPDATE CASCADE ON DELETE CASCADE"]
+    call_id: Annotated[
+        int | None, "REFERENCES call(id) ON UPDATE CASCADE ON DELETE CASCADE"
+    ]
     name: str
     notes: str
     created_at: datetime
     updated_at: datetime | None
     completed_at: datetime | None
 
-    @classmethod
-    def table(cls) -> Table[Self]:
-        return Table(cls)
 
-    @classmethod
-    def create(
-        cls,
-        user: User,
-        call: Call | None,
-        name: str,
-        notes: str,
-    ) -> Self:
-        return (
-            cls.table()
-            .insert()
-            .values(
-                user_id=user.id,
-                call_id=None if call is None else call.id,
-                name=name,
-                notes=notes,
-                created_at=utcnow(),
-            )
-            .returning("*")
-            .execute()
-            .one()
+class TaskStore:
+    def __init__(self, db: appbase.database.Database) -> None:
+        self.db: appbase.database.Database = db
+
+    def create_table(self) -> None:
+        self.db.table(Task).create().if_not_exists().execute()
+
+    def insert(self, task: TaskParams) -> Task:
+        return expect(
+            self.db.table(Task).insert().values(task).returning("*").execute().one()
         )
 
 
