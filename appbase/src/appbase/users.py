@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
-from typing import Annotated, Iterator
-import smtplib
 import email.message
+import smtplib
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Annotated
 
-from appbase.database import Model, Table, Database, INTPK
 import appbase.security as security
+from appbase.database import INTPK, Database, Model, Table
 
 
 class User(Model):
@@ -27,7 +28,7 @@ class UserStore(Table[User, Database]):
             (
                 name,
                 security.hash_password(password),
-                datetime.now(timezone.utc),
+                datetime.now(UTC),
             )
         )
 
@@ -72,7 +73,7 @@ class EmailStore(Table):
                 "user_id": user.id,
                 "address": address,
                 "priority": priority,
-                "created": datetime.now(timezone.utc),
+                "created": datetime.now(UTC),
                 "updated": None,
             }
         )

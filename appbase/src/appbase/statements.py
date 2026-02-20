@@ -1,29 +1,28 @@
-import sqlite3
 import dataclasses
 import re
-from typing import (
-    overload,
-    Any,
-    Self,
-    get_origin,
-    Annotated,
-    get_args,
-    TypeAlias,
-    Iterator,
-    get_type_hints,
-    Literal,
-)
-from types import UnionType
+import sqlite3
 import types
-from itertools import chain
+from collections.abc import Iterator
 from datetime import datetime, timedelta
+from itertools import chain
 from pathlib import Path
+from types import UnionType
+from typing import (
+    Annotated,
+    Any,
+    Literal,
+    Self,
+    get_args,
+    get_origin,
+    get_type_hints,
+    overload,
+)
 
 import pydantic
 
 type ConflictResolutionType = Literal["ABORT", "ROLLBACK", "FAIL", "IGNORE", "REPLACE"]
-JSONB: TypeAlias = Annotated[bytes, "jsonb"]
-INTPK: TypeAlias = Annotated[int, "PRIMARY KEY"]
+JSONB = Annotated[bytes, "jsonb"]
+INTPK = Annotated[int, "PRIMARY KEY"]
 
 
 @dataclasses.dataclass
@@ -45,17 +44,19 @@ class ColumnDef:
         cls,
         name: str,
         annotation: Any,
-        type_map: dict[type | Any, str] = {
-            str: "TEXT",
-            int: "INTEGER",
-            float: "REAL",
-            bytes: "BLOB",
-            datetime: "DATETIME",
-            timedelta: "TIMEDELTA",
-            Path: "PATH",
-            JSONB: "JSONB",
-        },
+        type_map: dict[type | Any, str] | None = None,
     ) -> Self:
+        if type_map is None:
+            type_map = {
+                str: "TEXT",
+                int: "INTEGER",
+                float: "REAL",
+                bytes: "BLOB",
+                datetime: "DATETIME",
+                timedelta: "TIMEDELTA",
+                Path: "PATH",
+                JSONB: "JSONB",
+            }
         sqlite_type = None
         constraints = None
         not_null = True
@@ -185,9 +186,9 @@ class Create[C: sqlite3.Cursor](Statement[C]):
         stmt += " " + self.name
         if self._columns is None:
             raise ValueError("Must provide column info.")
-        stmt += f"({', '.join(
-                              chain(map(str, self._columns), self._table_constraints or ())
-                          )})"
+        stmt += f"({
+            ', '.join(chain(map(str, self._columns), self._table_constraints or ()))
+        })"
         table_options = []
         if self._strict:
             table_options.append("STRICT")

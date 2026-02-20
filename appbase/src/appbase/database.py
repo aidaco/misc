@@ -1,22 +1,20 @@
+import sqlite3
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path, PosixPath, WindowsPath
 from textwrap import dedent
 from typing import (
-    Callable,
-    Protocol,
-    overload,
-    Any,
-    Iterator,
-    Self,
     Annotated,
-    Literal,
-    TypeAlias,
+    Any,
     ClassVar,
+    Literal,
+    Protocol,
+    Self,
+    overload,
     runtime_checkable,
 )
-from dataclasses import dataclass, fields, is_dataclass, field
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path, PosixPath, WindowsPath
-import sqlite3
 
 import pydantic
 import timedelta_isoformat
@@ -35,8 +33,8 @@ type AdapterType[T] = Callable[[T], bytes]
 type ConverterType[T] = Callable[[bytes], T]
 MISSING = object()
 MissingType = type(MISSING)
-JSONB: TypeAlias = Annotated[bytes, "jsonb"]
-INTPK: TypeAlias = Annotated[int, "PRIMARY KEY"]
+JSONB = Annotated[bytes, "jsonb"]
+INTPK = Annotated[int, "PRIMARY KEY"]
 
 
 TYPEADAPTER_CACHE: dict[type, pydantic.TypeAdapter] = {}
@@ -65,7 +63,7 @@ def validate[M](
         raise TypeError(f"Unsupported model type: {model}")
 
     if isinstance(obj, (tuple, list)):
-        obj = dict(zip(field_names, obj))
+        obj = dict(zip(field_names, obj, strict=False))
     elif isinstance(obj, sqlite3.Row):
         obj = dict(obj)
 
@@ -112,11 +110,11 @@ class CursorBase(sqlite3.Cursor):
             match typ:
                 case type() if is_dataclass(typ):
                     ns = (f.name for f in fields(typ))
-                    val = dict(zip(ns, row))
+                    val = dict(zip(ns, row, strict=False))
                     result = (*result, typeadapter(typ).validate_python(val))
                 case type() if issubclass(typ, pydantic.BaseModel):
                     ns = iter(typ.model_fields)
-                    val = dict(zip(ns, row))
+                    val = dict(zip(ns, row, strict=False))
                     result = (*result, typeadapter(typ).validate_python(val))
                 case type():
                     val = next(row)
@@ -140,11 +138,11 @@ class CursorBase(sqlite3.Cursor):
                 match typ:
                     case type() if is_dataclass(typ):
                         ns = (f.name for f in fields(typ))
-                        val = dict(zip(ns, row))
+                        val = dict(zip(ns, row, strict=False))
                         result = (*result, typeadapter(typ).validate_python(val))
                     case type() if issubclass(typ, pydantic.BaseModel):
                         ns = iter(typ.model_fields)
-                        val = dict(zip(ns, row))
+                        val = dict(zip(ns, row, strict=False))
                         result = (*result, typeadapter(typ).validate_python(val))
                     case type():
                         val = next(row)
@@ -354,7 +352,7 @@ class ModelCursor[M](CursorBase):
 
 
 ADAPTERS: dict[type, AdapterType] = {
-    datetime: lambda dt: dt.astimezone(timezone.utc).isoformat().encode(),
+    datetime: lambda dt: dt.astimezone(UTC).isoformat().encode(),
     Path: Path.__bytes__,
     PosixPath: PosixPath.__bytes__,
     WindowsPath: WindowsPath.__bytes__,

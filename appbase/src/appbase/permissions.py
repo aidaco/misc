@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Protocol, Any
+from typing import Any, Protocol
 
 PERMIT = True
 DENY = False
