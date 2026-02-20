@@ -1,5 +1,5 @@
+
 import appbase
-import pytest
 
 
 def test_root_config():

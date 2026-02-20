@@ -1,26 +1,24 @@
-from dataclasses import dataclass, field
 import io
+import json
+import tomllib
+import typing
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     Any,
     BinaryIO,
-    Callable,
     Literal,
-    Mapping,
     Protocol,
     TextIO,
-    TypeAlias,
-    runtime_checkable,
     overload,
+    runtime_checkable,
 )
-import json
-import typing
 
-from pydantic import BaseModel, TypeAdapter
 import platformdirs
-import toml
+import tomli_w
 import yaml
-
+from pydantic import BaseModel, TypeAdapter
 
 type Format = Literal["toml", "json", "yaml", "unsafe_yaml"]
 FORMATS: set[str] = {"toml", "json", "yaml", "safe_yaml"}
@@ -29,7 +27,7 @@ FORMATS: set[str] = {"toml", "json", "yaml", "safe_yaml"}
 def dump_str(value: Any, format: Format) -> str:
     match format:
         case "toml":
-            return toml.dumps(value)
+            return tomli_w.dumps(value)
         case "json":
             return json.dumps(value)
         case "yaml":
@@ -44,11 +42,9 @@ def write_format(value: Any, file: TextIO | BinaryIO, format: Format) -> None:
         case "toml":
             match file:
                 case io.TextIOBase():
-                    toml.dump(value, file)
+                    file.write(tomli_w.dumps(value))
                 case io.BufferedIOBase():
-                    buffer = io.StringIO()
-                    toml.dump(value, buffer)
-                    file.write(buffer.getvalue().encode())
+                    tomli_w.dump(value, file)
         case "json":
             match file:
                 case io.TextIOBase():
@@ -70,9 +66,9 @@ def read_format(file: TextIO | BinaryIO, format: Format) -> dict:
         case "toml":
             match file:
                 case io.TextIOBase():
-                    return toml.load(file)
+                    return tomllib.loads(file.read())
                 case io.BufferedIOBase():
-                    return toml.loads(file.read().decode())
+                    return tomllib.load(file)
         case "json":
             return json.load(file)
         case "safe_yaml":
@@ -136,7 +132,7 @@ def dump_path(
         write_format(value, file, format)
 
 
-Model: TypeAlias = BaseModel
+type Model = BaseModel
 
 
 @runtime_checkable
@@ -150,7 +146,7 @@ class RWSourceType(Protocol):
     def dump(self, data: Mapping[str, Any]) -> None: ...
 
 
-SourceType: TypeAlias = RSourceType | RWSourceType
+type SourceType = RSourceType | RWSourceType
 
 
 @dataclass
@@ -288,25 +284,25 @@ class ConfigConfig[S: SourceType]:
 
     @overload
     @staticmethod
-    def load[SS: SourceType](*, source: SS) -> "ConfigConfig[SS]": ...
+    def load[SS: SourceType](*, source: SS) -> ConfigConfig[SS]: ...
     @overload
     @staticmethod
-    def load(*, name: str) -> "ConfigConfig[PlatformdirsSource]": ...
+    def load(*, name: str) -> ConfigConfig[PlatformdirsSource]: ...
     @overload
     @staticmethod
     def load(
         *, path: Path | str, format: Format | None = None
-    ) -> "ConfigConfig[PathSource]": ...
+    ) -> ConfigConfig[PathSource]: ...
     @overload
     @staticmethod
-    def load(*, text: str, format: Format = "toml") -> "ConfigConfig[StrSource]": ...
+    def load(*, text: str, format: Format = "toml") -> ConfigConfig[StrSource]: ...
     @overload
     @staticmethod
-    def load(*, mapping: Mapping) -> "ConfigConfig[MappingSource]": ...
+    def load(*, mapping: Mapping) -> ConfigConfig[MappingSource]: ...
     @staticmethod
     def load(
         *, source=None, name=None, path=None, text=None, mapping=None, format=None
-    ) -> "ConfigConfig":
+    ) -> ConfigConfig:
         if source:
             src = source
         elif name:

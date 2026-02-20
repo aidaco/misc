@@ -1,26 +1,25 @@
-import pytest
+import hashlib
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pydantic
-from dataclasses import dataclass
-from datetime import datetime, timezone
-import hashlib
+import pytest
 
 import appbase
 
 
 def utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def test_database_context_manager():
     db = appbase.database.connect(":memory:")
     with (
         patch.object(db, "connect") as connect_mock,
-        patch.object(db, "close") as close_mock,
+        patch.object(db, "close") as close_mock,db
     ):
-        with db:
-            pass
+        pass
     connect_mock.assert_called_once()
     close_mock.assert_called_once()
 

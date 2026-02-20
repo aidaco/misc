@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build"]
+build-backend = "uv_build"
 
 [project]
 name = "appbase"
 version = "0.0.1-dev"
 description = "appbase"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = {text = "MIT License"}
 keywords = ["appbase"]
 authors = [
@@ -17,7 +17,7 @@ dependencies = [
   "rich",
   "platformdirs",
   "PyYAML",
-  "toml",
+  "tomli-w",
   "pydantic",
   "cyclopts",
   "timedelta-isoformat",
@@ -29,18 +29,18 @@ dependencies = [
   "uvicorn"
 ]
 
-[project.optional-dependencies]
-dev = ["pre-commit", "pyright", "ruff", "mypy", "types-requests", "types-toml"]
+[dependency-groups]
+dev = ["ruff", "ty", "pre-commit"]
 test = ["pytest", "coverage"]
 
 [project.urls]
 "Source" = "https://github.com/aidaco/misc/appbase"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
 [tool.ruff]
-target-version = 'py312'
+target-version = "py314"
 
-[tool.pyright]
-pythonVersion = '3.12'
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ty.environment]
+python-version = "3.14"

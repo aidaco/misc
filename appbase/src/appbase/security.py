@@ -1,4 +1,4 @@
-from datetime import timedelta, datetime, timezone
+from datetime import UTC, datetime, timedelta
 
 import argon2
 import jwt
@@ -16,7 +16,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def create_token(data: dict, dur: timedelta, secret: str) -> str:
     return jwt.encode(
-        data | {"exp": datetime.now(timezone.utc) + dur},
+        data | {"exp": datetime.now(UTC) + dur},
         secret,
         algorithm="HS256",
     )
@@ -28,4 +28,4 @@ def verify_token(token: str, secret: str) -> dict:
         payload.pop("exp")
         return payload
     except jwt.DecodeError:
-        raise ValueError("Invalid token")
+        raise ValueError("Invalid token") from None
