@@ -7,7 +7,7 @@ name = "appbase"
 version = "0.0.1-dev"
 description = "appbase"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.13"
 license = {text = "MIT License"}
 keywords = ["appbase"]
 authors = [
