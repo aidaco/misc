@@ -1,4 +1,6 @@
+import random
 import sqlite3
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, fields, is_dataclass
@@ -270,6 +272,18 @@ class ModelCursor[M](CursorBase):
         return super().parsemany(self.model, size)
 
     def iter(self) -> Iterator[M]:
+        """Stream rows lazily, parsing each into the model as it is fetched.
+
+        WARNING: a lazy cursor holds a read transaction open on the connection
+        until it is exhausted, which in WAL pins a read snapshot. If you write on
+        the *same* connection while this cursor is still open and another
+        connection commits, that write fails `OperationalError: database is
+        locked` *immediately* — busy_timeout does not cover it and
+        `retry_on_locked` cannot recover it (the cursor stays open across every
+        retry). When you write inside the loop, materialize the read first
+        (`.all()`), read on a separate connection from the one you write on, or
+        page with keyset pagination. Plain read-only iteration is fine.
+        """
         yield from super().parsed(self.model)
 
     def delete(
@@ -448,6 +462,12 @@ def connect_raw(
         sqlite3.register_adapter(cls, adapter)
     for name, converter in converters.items():
         sqlite3.register_converter(name, converter)
+    # PRAGMA optimize is intentionally NOT run here. optimize performs an ANALYZE
+    # *write*, and a write during the connect handshake makes a burst of
+    # simultaneous first-connects fail SQLITE_BUSY on the read->write lock upgrade
+    # (returned immediately for deadlock avoidance, so busy_timeout does not cover
+    # it). optimize runs on close instead (see close_raw), which is SQLite's
+    # recommended time for it. See stress/FINDINGS.md (connect_storm).
     connection.executescript(
         dedent(f"""\
         PRAGMA busy_timeout = {timeout * 1000};
@@ -459,7 +479,6 @@ def connect_raw(
         PRAGMA foreign_keys = on;
         PRAGMA auto_vacuum = incremental;
         PRAGMA secure_delete = on;
-        PRAGMA optimize = 0x10002;
         PRAGMA recursive_triggers = on;
     """)
     )
@@ -500,3 +519,45 @@ def connect(
     converters: dict[str, ConverterType] = CONVERTERS,
 ) -> Database:
     return Database(uri, autocommit, detect_types, timeout, echo, adapters, converters)
+
+
+def retry_on_locked[T](
+    operation: Callable[[], T],
+    attempts: int = 12,
+    base_delay: float = 0.2,
+    max_delay: float = 4.0,
+) -> T:
+    """Run a write, retrying on SQLite lock/busy contention with capped backoff.
+
+    appbase already sets `busy_timeout` in `connect_raw`, which makes concurrent
+    writers *wait* rather than fail for ordinary held-lock contention. Use
+    `retry_on_locked` as the application-level backstop for the residual cases
+    busy_timeout does not cover, wrapping only the write::
+
+        retry_on_locked(cursor.insert().values(record).execute)
+
+    Only lock/busy `OperationalError` is retried (matched by message); any other
+    error (schema, syntax, ...) propagates immediately. Between attempts it sleeps
+    a full-jittered capped-exponential delay
+    (`uniform(0, min(base_delay * 2**attempt, max_delay))`) — the jitter
+    de-synchronizes writers that collided so they do not retry in lockstep and
+    re-collide. The default 12-attempt budget sums to ~30s worst case, matching
+    appbase's default busy_timeout.
+
+    Retry cannot rescue a *snapshot-staleness* failure: a write that fails because
+    a streaming read cursor is still open on the same connection (see
+    `ModelCursor.iter`) re-fails on every attempt, because the cursor stays open
+    across the retries. Materialize the read (`.all()`) or read on a separate
+    connection from the one you write on instead.
+    """
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "lock" not in message and "busy" not in message:
+                raise
+            if attempt == attempts - 1:
+                raise
+            time.sleep(random.uniform(0, min(base_delay * 2**attempt, max_delay)))
+    raise AssertionError("unreachable")

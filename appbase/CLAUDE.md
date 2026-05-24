@@ -50,7 +50,7 @@ Wraps `sqlite3` with three cursor tiers:
 - `EZCursor`: CRUD convenience methods (create, insert, select, update, delete, count)
 - `ModelCursor[M]`: Type-parameterized cursor bound to a specific model
 
-`Database` manages connection lifecycle, registers type adapters/converters (datetime, Path, timedelta), and sets SQLite pragmas (WAL mode, mmap, foreign keys, secure delete). Routine free-page reclamation runs on close via `PRAGMA incremental_vacuum` (best-effort; skipped if the DB is busy). Full compaction is opt-in via `Database.vacuum()` — it needs a database-wide exclusive lock, so run it only in a maintenance window on an idle connection, never under concurrent access.
+`Database` manages connection lifecycle, registers type adapters/converters (datetime, Path, timedelta), and sets SQLite pragmas (WAL mode, `busy_timeout`, mmap, foreign keys, secure delete); the connect handshake performs no writes, so a burst of simultaneous first-connects does not collide. Routine free-page reclamation runs on close via `PRAGMA incremental_vacuum` (best-effort; skipped if the DB is busy). Full compaction is opt-in via `Database.vacuum()` — it needs a database-wide exclusive lock, so run it only in a maintenance window on an idle connection, never under concurrent access. See **Concurrency** below for the multi-writer rules.
 
 ### statements.py — SQL query builders
 
@@ -67,6 +67,14 @@ Rule-based authorization with PERMIT/DENY/PASS decisions. Uses protocols (`HasId
 ### users.py — Lightweight user system
 
 `User` dataclass + `Users` store built on `database.py` and `security.py`: registration (`add`), lookup (`get`/`get_by_id`/`all`/`count`), password auth (`login` with transparent argon2 rehash, `set_password`), and optional JWT issuance/verification (`issue_token`/`authenticate_token`). Construct `Users(db, token_secret=...)` then call `create_table()`.
+
+## Concurrency (multiple writers)
+
+appbase is tuned for several writer processes/connections on one database: `connect_raw` sets WAL mode and `busy_timeout = timeout * 1000` (30s default), and `connect()` performs no writes (so simultaneous cold connects don't collide). Beyond that, follow these rules — each maps to a measured boundary in `stress/` (`uv run python stress/concurrency.py`; details in `stress/FINDINGS.md`):
+
+- **Wrap writes in `database.retry_on_locked(...)`** as the app-level backstop for lock contention that slips past `busy_timeout`. SQLite serializes writers (one at a time), so concurrency adds latency, not write throughput.
+- **Never hold a streaming read (`ModelCursor.iter()` / `CursorBase.parsed()`) open across a write on the same connection.** In WAL it pins a read snapshot; once another connection commits, the next write fails `database is locked` *immediately* — neither `busy_timeout` nor `retry_on_locked` can recover it. Materialize first (`.all()`), read on a separate connection from the one you write on, or page with keyset pagination.
+- **`Database.vacuum()` is maintenance-window-only** (needs a DB-wide exclusive lock; fails under any concurrent writer). Routine reclamation already happens via `incremental_vacuum` on close.
 
 ## Key Patterns
 
