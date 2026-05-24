@@ -50,7 +50,7 @@ Wraps `sqlite3` with three cursor tiers:
 - `EZCursor`: CRUD convenience methods (create, insert, select, update, delete, count)
 - `ModelCursor[M]`: Type-parameterized cursor bound to a specific model
 
-`Database` manages connection lifecycle, registers type adapters/converters (datetime, Path, timedelta), and sets SQLite pragmas (WAL mode, mmap, foreign keys, secure delete).
+`Database` manages connection lifecycle, registers type adapters/converters (datetime, Path, timedelta), and sets SQLite pragmas (WAL mode, mmap, foreign keys, secure delete). Routine free-page reclamation runs on close via `PRAGMA incremental_vacuum` (best-effort; skipped if the DB is busy). Full compaction is opt-in via `Database.vacuum()` — it needs a database-wide exclusive lock, so run it only in a maintenance window on an idle connection, never under concurrent access.
 
 ### statements.py — SQL query builders
 

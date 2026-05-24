@@ -1,6 +1,6 @@
 import sqlite3
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, fields, is_dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PosixPath, WindowsPath
@@ -404,6 +404,17 @@ class Database:
         if self.connection is not None:
             close_raw(self.connection)
 
+    def vacuum(self) -> None:
+        """Fully compact the database via VACUUM (rebuilds the file).
+
+        VACUUM needs a database-wide exclusive lock, so run this in a maintenance
+        window on a single, otherwise-idle connection — it is not safe under
+        concurrent access. Routine free-page reclamation already happens on close
+        via PRAGMA incremental_vacuum; reach for vacuum() only when you want to
+        shrink the file on disk or rebuild it for performance.
+        """
+        vacuum_raw(self.connect())
+
     def __enter__(self) -> Self:
         self.connect()
         return self
@@ -434,7 +445,8 @@ def connect_raw(
     for name, converter in converters.items():
         sqlite3.register_converter(name, converter)
     connection.executescript(
-        dedent("""\
+        dedent(f"""\
+        PRAGMA busy_timeout = {timeout * 1000};
         PRAGMA journal_mode = wal;
         PRAGMA synchronous = normal;
         PRAGMA temp_store = memory;
@@ -451,14 +463,27 @@ def connect_raw(
 
 
 def close_raw(connection: sqlite3.Connection) -> None:
+    # Best-effort housekeeping: if the database is busy (another writer holds the
+    # lock), skip reclamation rather than block close — the next connection to
+    # close while the database is idle will reclaim the freed pages.
+    with suppress(sqlite3.OperationalError):
+        connection.executescript(
+            dedent("""\
+            PRAGMA incremental_vacuum;
+            PRAGMA analysis_limit=400;
+            PRAGMA optimize;
+        """)
+        )
+    connection.close()
+
+
+def vacuum_raw(connection: sqlite3.Connection) -> None:
     connection.executescript(
         dedent("""\
         VACUUM;
-        PRAGMA analysis_limit=400;
         PRAGMA optimize;
     """)
     )
-    connection.close()
 
 
 def connect(
