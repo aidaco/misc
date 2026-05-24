@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "appbase"
-version = "0.0.1-dev"
+version = "0.0.1"
 description = "appbase"
 readme = "README.md"
 requires-python = ">=3.14"
