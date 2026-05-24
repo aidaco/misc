@@ -41,7 +41,7 @@ permissions.py   (independent)
 
 ### config.py — Configuration management
 
-Multi-source configuration system with lazy loading and caching. Sources include file paths (`PathSource`), in-memory strings/dicts, and OS-specific directories (`PlatformdirsSource`). Supports TOML, JSON, and YAML formats. Uses Pydantic `TypeAdapter` (cached in `TYPEADAPTER_CACHE`) for validation/serialization. Configuration classes are registered via `@section` and `@root` decorators on `ConfigConfig`.
+Multi-source configuration system with lazy loading and caching. Sources include file paths (`PathSource`), in-memory strings/dicts, and OS-specific directories (`PlatformdirsSource`). Supports TOML, JSON, and YAML (`yaml` uses safe load/dump; `unsafe_yaml` opts into arbitrary Python objects). Uses Pydantic `TypeAdapter` (cached in `TYPEADAPTER_CACHE`) for validation/serialization. Configuration classes are registered via `@section` and `@root` decorators on `ConfigConfig`.
 
 ### database.py — SQLite ORM
 
@@ -64,9 +64,9 @@ Argon2 for password hashing, HS256 JWT for tokens with expiration.
 
 Rule-based authorization with PERMIT/DENY/PASS decisions. Uses protocols (`HasId`, `HasOwner`, `HasPermissions`, `HasRole`) for duck-typed checks against subjects and resources.
 
-### users.py — User/Email models and stores
+### users.py — Lightweight user system
 
-Example models and specialized stores built on `database.py` and `security.py`. `UserStore` adds a `login()` method with password verification.
+`User` dataclass + `Users` store built on `database.py` and `security.py`: registration (`add`), lookup (`get`/`get_by_id`/`all`/`count`), password auth (`login` with transparent argon2 rehash, `set_password`), and optional JWT issuance/verification (`issue_token`/`authenticate_token`). Construct `Users(db, token_secret=...)` then call `create_table()`.
 
 ## Key Patterns
 

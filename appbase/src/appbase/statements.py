@@ -29,14 +29,14 @@ INTPK = Annotated[int, "PRIMARY KEY"]
 class ColumnDef:
     name: str
     dtype: str | None
-    contraints: str | None
+    constraints: str | None
 
     def __str__(self) -> str:
         parts = [self.name]
         if self.dtype:
             parts.append(self.dtype)
-        if self.contraints:
-            parts.append(self.contraints)
+        if self.constraints:
+            parts.append(self.constraints)
         return " ".join(parts)
 
     @classmethod
@@ -240,16 +240,16 @@ class Select[C: sqlite3.Cursor](Statement[C]):
     @overload
     def where(self, **kwparams) -> Self: ...
     def where(self, expr: str | dict | None = None, **kwparams):
-        match (expr, kwparams):
-            case (str(), dict()) if not kwparams:
+        match expr:
+            case str() if not kwparams:
                 self._where = expr
                 return self
-            case (dict(), dict()) if not kwparams:
+            case dict() if not kwparams:
                 param = extract_param((), expr)
-            case (None, dict()) if kwparams:
+            case None if kwparams:
                 param = extract_param((), kwparams)
             case _:
-                raise TypeError("Must pass set expr as str or set params as kwargs")
+                raise TypeError("Must pass where as a str or as kwargs")
         match param:
             case dict():
                 self._where = " AND ".join(f"{name}=:{name}" for name in param)
@@ -257,7 +257,7 @@ class Select[C: sqlite3.Cursor](Statement[C]):
                     (self._param | param) if self._param is not None else param
                 )
             case _:
-                raise TypeError("Must pass update params as dict or kwargs")
+                raise TypeError("Must pass where params as a dict or kwargs")
         return self
 
     def groupby(self, *terms: str) -> Self:
@@ -352,23 +352,15 @@ class Insert[C: sqlite3.Cursor](Statement[C]):
         match self._param:
             case None:
                 self._param = param
-            case tuple() as p:
-                assert type(p) is type(param)
-                assert len(p) == len(param)
-                self._param = [p, param]
-                if self._values is not None:
-                    return self
-            case dict() as p:
-                assert type(p) is type(param)
-                assert len(p) == len(param)
+            case (tuple() | dict()) as p:
+                if type(param) is not type(p) or len(param) != len(p):
+                    raise ValueError("All inserted rows must have the same shape.")
                 self._param = [p, param]
                 if self._values is not None:
                     return self
             case list() as ps:
-                length = len(param)
-                cls = type(param)
-                assert all(len(i) == length for i in ps)
-                assert all(type(i) is cls for i in ps)
+                if any(type(i) is not type(param) or len(i) != len(param) for i in ps):
+                    raise ValueError("All inserted rows must have the same shape.")
                 ps.append(param)
                 if self._values is not None:
                     return self
@@ -439,16 +431,16 @@ class Update[C: sqlite3.Cursor](Statement[C]):
     @overload
     def set(self, **kwparams) -> Self: ...
     def set(self, expr: str | dict | None = None, **kwparams):
-        match (expr, kwparams):
-            case (str(), dict()) if not kwparams:
+        match expr:
+            case str() if not kwparams:
                 self._set = expr
                 return self
-            case (dict(), dict()) if not kwparams:
+            case dict() if not kwparams:
                 param = extract_param((), expr)
-            case (None, dict()) if kwparams:
+            case None if kwparams:
                 param = extract_param((), kwparams)
             case _:
-                raise TypeError("Must pass set expr as str or set params as kwargs")
+                raise TypeError("Must pass set as a str or as kwargs")
         match param:
             case dict():
                 self._set = ", ".join(f"{name}=:{name}" for name in param)
@@ -456,7 +448,7 @@ class Update[C: sqlite3.Cursor](Statement[C]):
                     (self._param | param) if self._param is not None else param
                 )
             case _:
-                raise TypeError("Must pass update params as dict or kwargs")
+                raise TypeError("Must pass set params as a dict or kwargs")
         return self
 
     @overload
@@ -464,16 +456,16 @@ class Update[C: sqlite3.Cursor](Statement[C]):
     @overload
     def where(self, **kwparams) -> Self: ...
     def where(self, expr: str | dict | None = None, **kwparams):
-        match (expr, kwparams):
-            case (str(), dict()) if not kwparams:
+        match expr:
+            case str() if not kwparams:
                 self._where = expr
                 return self
-            case (dict(), dict()) if not kwparams:
+            case dict() if not kwparams:
                 param = extract_param((), expr)
-            case (None, dict()) if kwparams:
+            case None if kwparams:
                 param = extract_param((), kwparams)
             case _:
-                raise TypeError("Must pass set expr as str or set params as kwargs")
+                raise TypeError("Must pass where as a str or as kwargs")
         match param:
             case dict():
                 self._where = " AND ".join(f"{name}=:{name}" for name in param)
@@ -481,7 +473,7 @@ class Update[C: sqlite3.Cursor](Statement[C]):
                     (self._param | param) if self._param is not None else param
                 )
             case _:
-                raise TypeError("Must pass update params as dict or kwargs")
+                raise TypeError("Must pass where params as a dict or kwargs")
         return self
 
     def returning(self, *exprs: str) -> Self:
@@ -489,7 +481,7 @@ class Update[C: sqlite3.Cursor](Statement[C]):
         return self
 
     def conflict(self, conflict_resolution: ConflictResolutionType) -> Self:
-        self.conflict_resolution = conflict_resolution
+        self._conflict_resolution = conflict_resolution
         return self
 
     def __str__(self) -> str:
@@ -531,16 +523,16 @@ class Delete[C: sqlite3.Cursor](Statement[C]):
     @overload
     def where(self, **kwparams) -> Self: ...
     def where(self, expr: str | dict | None = None, **kwparams):
-        match (expr, kwparams):
-            case (str(), dict()) if not kwparams:
+        match expr:
+            case str() if not kwparams:
                 self._where = expr
                 return self
-            case (dict(), dict()) if not kwparams:
+            case dict() if not kwparams:
                 param = extract_param((), expr)
-            case (None, dict()) if kwparams:
+            case None if kwparams:
                 param = extract_param((), kwparams)
             case _:
-                raise TypeError("Must pass set expr as str or set params as kwargs")
+                raise TypeError("Must pass where as a str or as kwargs")
         match param:
             case dict():
                 self._where = " AND ".join(f"{name}=:{name}" for name in param)
@@ -548,7 +540,7 @@ class Delete[C: sqlite3.Cursor](Statement[C]):
                     (self._param | param) if self._param is not None else param
                 )
             case _:
-                raise TypeError("Must pass update params as dict or kwargs")
+                raise TypeError("Must pass where params as a dict or kwargs")
         return self
 
     def returning(self, *expr: str) -> Self:

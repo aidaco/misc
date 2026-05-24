@@ -57,7 +57,7 @@ def validate[M](
         validator = model.model_validate
         field_names = iter(model.model_fields)
     elif isinstance(model, DataclassLike):
-        validator = typeadapter(model).validate_python  # type: ignore
+        validator = typeadapter(model).validate_python
         field_names = (f.name for f in fields(model))
     else:
         raise TypeError(f"Unsupported model type: {model}")
@@ -67,7 +67,7 @@ def validate[M](
     elif isinstance(obj, sqlite3.Row):
         obj = dict(obj)
 
-    return validator(obj)  # type: ignore
+    return validator(obj)
 
 
 class CursorBase(sqlite3.Cursor):
@@ -382,7 +382,11 @@ class Database:
         cursor.model = model
         return cursor
 
-    def cursor[C: sqlite3.Cursor](self, factory: type[C] = EZCursor) -> C:
+    @overload
+    def cursor(self) -> EZCursor: ...
+    @overload
+    def cursor[C: sqlite3.Cursor](self, factory: type[C]) -> C: ...
+    def cursor(self, factory: type[sqlite3.Cursor] = EZCursor) -> sqlite3.Cursor:
         return self.connect().cursor(factory)
 
     def connect(self) -> sqlite3.Connection:

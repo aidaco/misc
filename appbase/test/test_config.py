@@ -1,3 +1,4 @@
+import io
 
 import appbase
 
@@ -70,3 +71,13 @@ def test_config_reload(tmp_path):
     assert C().b == 3
     assert NSC().c == {}
     assert NSC().d == "d"
+
+
+def test_yaml_roundtrip_safe_and_unsafe(tmp_path):
+    data = {"a": 1, "ns": {"b": "two"}}
+    for fmt in ("yaml", "unsafe_yaml"):
+        text = appbase.config.dump_str(data, fmt)
+        assert appbase.config.read_format(io.StringIO(text), fmt) == data
+        p = tmp_path / "config.out"
+        appbase.config.dump_path(data, p, fmt)
+        assert appbase.config.load_path(p, fmt) == data

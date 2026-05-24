@@ -21,7 +21,7 @@ import yaml
 from pydantic import BaseModel, TypeAdapter
 
 type Format = Literal["toml", "json", "yaml", "unsafe_yaml"]
-FORMATS: set[str] = {"toml", "json", "yaml", "safe_yaml"}
+FORMATS: set[str] = {"toml", "json", "yaml", "unsafe_yaml"}
 
 
 def dump_str(value: Any, format: Format) -> str:
@@ -31,9 +31,9 @@ def dump_str(value: Any, format: Format) -> str:
         case "json":
             return json.dumps(value)
         case "yaml":
-            return yaml.dump(value)
-        case "safe_yaml":
             return yaml.safe_dump(value)
+        case "unsafe_yaml":
+            return yaml.dump(value)
     raise ValueError(f"Unsupported format: {format}.")
 
 
@@ -44,7 +44,7 @@ def write_format(value: Any, file: TextIO | BinaryIO, format: Format) -> None:
                 case io.TextIOBase():
                     file.write(tomli_w.dumps(value))
                 case io.BufferedIOBase():
-                    tomli_w.dump(value, file)
+                    tomli_w.dump(value, typing.cast(BinaryIO, file))
         case "json":
             match file:
                 case io.TextIOBase():
@@ -53,10 +53,13 @@ def write_format(value: Any, file: TextIO | BinaryIO, format: Format) -> None:
                     buffer = io.StringIO()
                     json.dump(value, buffer)
                     file.write(buffer.getvalue().encode())
-        case "safe_yaml":
-            yaml.dump(value, file)
-        case "yaml":
-            yaml.dump(value, file)
+        case "yaml" | "unsafe_yaml":
+            text = dump_str(value, format)
+            match file:
+                case io.TextIOBase():
+                    file.write(text)
+                case io.BufferedIOBase():
+                    file.write(text.encode())
         case _:
             raise ValueError(f"Unsupported format: {format}.")
 
@@ -71,9 +74,9 @@ def read_format(file: TextIO | BinaryIO, format: Format) -> dict:
                     return tomllib.load(file)
         case "json":
             return json.load(file)
-        case "safe_yaml":
-            return yaml.safe_load(file)
         case "yaml":
+            return yaml.safe_load(file)
+        case "unsafe_yaml":
             return yaml.unsafe_load(file)
     raise ValueError(f"Unsupported format: {format}.")
 
@@ -113,7 +116,8 @@ def load_path(path: Path, format: Format | None = None) -> dict:
     _format = format or path.suffix.lstrip(".")
     if not _format:
         raise ValueError(f"Unknown extension {path}, pass the format as an argument.")
-    assert _format in FORMATS
+    if _format not in FORMATS:
+        raise ValueError(f"Unsupported format: {_format}.")
     _format = typing.cast(Format, _format)
     with path.open("rb") as file:
         return read_format(file, _format)
@@ -125,8 +129,10 @@ def dump_path(
     format: Format | None = None,
 ) -> None:
     if format is None:
-        format = typing.cast(Format, path.suffix.lstrip("."))
-        assert format in FORMATS
+        suffix = path.suffix.lstrip(".")
+        if suffix not in FORMATS:
+            raise ValueError(f"Unsupported format: {suffix}.")
+        format = typing.cast(Format, suffix)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as file:
         write_format(value, file, format)
@@ -242,13 +248,15 @@ class ConfigConfig[S: SourceType]:
         return dump_python(self.section_instances[key])
 
     def get_root(self) -> Any:
-        assert self.root_class is not None
+        if self.root_class is None:
+            raise ValueError("No root class configured; apply @root first.")
         if self.root_instance is None:
             self.root_instance = parse_python(self.data, self.root_class)
         return self.root_instance
 
     def root_to_dict(self) -> dict:
-        assert self.root_instance is not None
+        if self.root_instance is None:
+            raise ValueError("No root instance; call get_root() first.")
         return dump_python(self.root_instance)
 
     def to_dict(self) -> dict[str, dict]:

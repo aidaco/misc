@@ -1,3 +1,3 @@
-from appbase import config, database, security
+from appbase import config, database, permissions, security, users
 
-__all__ = ["config", "database", "security"]
+__all__ = ["config", "database", "permissions", "security", "users"]
